@@ -5,6 +5,7 @@ Exports the Flask application for Vercel's Python runtime.
 
 import sys
 import os
+from urllib.parse import parse_qs, urlencode
 
 # Ensure the root project directory is on the Python module search path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,32 +19,39 @@ class VercelPathFixMiddleware:
     """
     WSGI middleware that normalizes PATH_INFO and SCRIPT_NAME on Vercel.
 
-    When Vercel rewrites requests to /api/index, PATH_INFO or SCRIPT_NAME may
-    contain the internal serverless destination rather than the original route.
-    This middleware reconstructs the clean client-intended path.
+    When Vercel rewrites requests to /api/index?__path=$1, the captured path
+    is stored in the __path query parameter. This middleware reconstructs
+    the clean client-intended PATH_INFO and removes __path from QUERY_STRING.
     """
 
     def __init__(self, wsgi_app):
         self.wsgi_app = wsgi_app
 
     def __call__(self, environ, start_response):
-        environ["ORIGINAL_PATH_INFO"] = environ.get("PATH_INFO", "")
-        matched_path = environ.get("HTTP_X_MATCHED_PATH")
-        path_info = environ.get("PATH_INFO", "")
-
-        # Check HTTP_X_MATCHED_PATH first (if it represents a user route)
-        if matched_path and not matched_path.startswith(("/api/index", "/api/index.py")):
-            clean_path = matched_path.split("?")[0]
-            environ["PATH_INFO"] = clean_path if clean_path else "/"
-            environ["SCRIPT_NAME"] = ""
+        qs_raw = environ.get("QUERY_STRING", "")
+        if "__path=" in qs_raw or qs_raw.startswith("__path"):
+            qs = parse_qs(qs_raw, keep_blank_values=True)
+            if "__path" in qs:
+                captured = qs.pop("__path")[0]
+                environ["PATH_INFO"] = "/" + captured.lstrip("/")
+                environ["QUERY_STRING"] = urlencode(qs, doseq=True)
+                environ["SCRIPT_NAME"] = ""
         else:
-            # Strip /api/index.py or /api/index prefix if present
-            for prefix in ("/api/index.py", "/api/index"):
-                if path_info.startswith(prefix):
-                    clean_path = path_info[len(prefix):]
-                    environ["PATH_INFO"] = clean_path if clean_path else "/"
-                    environ["SCRIPT_NAME"] = ""
-                    break
+            # Fallback for direct invocations or legacy rewrites
+            matched_path = environ.get("HTTP_X_MATCHED_PATH")
+            path_info = environ.get("PATH_INFO", "")
+
+            if matched_path and not matched_path.startswith(("/api/index", "/api/index.py")):
+                clean_path = matched_path.split("?")[0]
+                environ["PATH_INFO"] = clean_path if clean_path else "/"
+                environ["SCRIPT_NAME"] = ""
+            elif path_info.startswith(("/api/index.py", "/api/index")):
+                for prefix in ("/api/index.py", "/api/index"):
+                    if path_info.startswith(prefix):
+                        clean_path = path_info[len(prefix):]
+                        environ["PATH_INFO"] = clean_path if clean_path else "/"
+                        environ["SCRIPT_NAME"] = ""
+                        break
 
         if not environ.get("PATH_INFO"):
             environ["PATH_INFO"] = "/"
