@@ -7,10 +7,12 @@ health status tracking, and failover eligibility queries.
 """
 
 import json
+import logging
 import os
 import secrets
 import sqlite3
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,9 +30,22 @@ def _utc_now_iso() -> str:
 class Database:
     """SQLite database manager for API configurations and event history."""
 
-    def __init__(self, db_path: str | None = None, config: Config | None = None):
+    def __init__(self, db_path: str | None = None, config: Config | None = None, force_production_check: bool = False):
         self.config = config or Config()
-        self.db_path = db_path or self.config.DATABASE_PATH
+        raw_path = db_path or self.config.DATABASE_PATH
+
+        # Guard against in-memory databases in production
+        if raw_path == ":memory:":
+            is_prod = os.getenv("FLASK_ENV") == "production"
+            is_test = bool(os.getenv("TESTING")) or ("pytest" in sys.modules)
+            if is_prod and (not is_test or force_production_check):
+                raise ValueError("In-memory SQLite database is strictly prohibited in production mode.")
+            self.db_path = ":memory:"
+        elif not os.path.isabs(raw_path):
+            self.db_path = os.path.abspath(os.path.join(self.config.BASE_DIR, raw_path))
+        else:
+            self.db_path = os.path.abspath(raw_path)
+
         self._ensure_parent_dir()
         self.init_db()
 
@@ -39,13 +54,20 @@ class Database:
         if self.db_path and self.db_path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
 
-    def get_connection(self) -> sqlite3.Connection:
-        """Create and return a new SQLite connection with row factory."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+    @contextmanager
+    def get_connection(self):
+        """
+        Create and yield a new SQLite connection with row factory, WAL mode and foreign keys.
+        Ensures connections are properly committed and closed.
+        """
+        conn = sqlite3.connect(self.db_path, timeout=15.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def init_db(self):
         """Create database tables and indexes if they do not exist."""
@@ -905,24 +927,14 @@ class Database:
 
     def save_state_snapshot(self) -> bool:
         """
-        Attempt to write a current snapshot to data/seed_state.json or /tmp/seed_state.json.
-        Does not overwrite repo seed file during pytest runs.
+        Attempt to write a current snapshot to runtime cache (/tmp/seed_state.json).
+        Does not dirty repository source code.
         """
         if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
             return False
 
         data = self.export_backup()
-        target_path = os.path.join(self.config.BASE_DIR, "data", "seed_state.json")
-        try:
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            with open(target_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            return True
-        except Exception:
-            # If filesystem is read-only (like /var/task on Vercel)
-            pass
-
-        # Try /tmp as secondary snapshot location
+        # Only write to temporary runtime directory, never dirty source repository
         tmp_path = os.path.join("/tmp", "seed_state.json")
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:

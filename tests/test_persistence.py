@@ -133,3 +133,80 @@ class TestSubadminSeedingAndPersistence:
         assert "is_vercel" in data
         assert "subadmins_count" in data
         assert "database_path" in data
+
+    def test_subadmin_account_preserved_when_adding_and_deleting_api(self, main_admin_session, test_client):
+        client, csrf = main_admin_session
+        # 1. Main admin creates subadmin
+        client.post(
+            "/admin/api/subadmins",
+            headers={"X-CSRF-Token": csrf},
+            json={"username": "api_creator_sub", "password": "sub_pass_strong_123"},
+        )
+        user = db.get_user_by_username("api_creator_sub")
+        assert user is not None
+        user_id = user["id"]
+
+        # 2. Subadmin logs in
+        login_res = test_client.post(
+            "/admin/login",
+            json={"username": "api_creator_sub", "password": "sub_pass_strong_123"},
+        )
+        assert login_res.status_code == 200
+        sub_csrf = login_res.get_json()["csrf_token"]
+
+        # 3. Subadmin adds an API configuration
+        add_res = test_client.post(
+            "/admin/api/configs",
+            headers={"X-CSRF-Token": sub_csrf},
+            json={
+                "display_name": "API Added By Subadmin",
+                "provider_name": "md5decrypt",
+                "endpoint": "https://api.md5decrypt.net/",
+                "credential": "test_cred_token_999",
+                "priority": 10,
+            },
+        )
+        assert add_res.status_code == 201
+        cfg_id = add_res.get_json()["id"]
+
+        # 4. Verify subadmin account was NOT touched or deleted
+        user_after_add = db.get_user_by_username("api_creator_sub")
+        assert user_after_add is not None
+        assert user_after_add["id"] == user_id
+        assert user_after_add["is_active"] == 1
+        assert user_after_add["role"] == "subadmin"
+
+        # 5. Subadmin deletes the API configuration
+        del_res = test_client.delete(
+            f"/admin/api/configs/{cfg_id}",
+            headers={"X-CSRF-Token": sub_csrf},
+        )
+        assert del_res.status_code == 200
+
+        # 6. Verify subadmin account is STILL intact
+        user_after_del = db.get_user_by_username("api_creator_sub")
+        assert user_after_del is not None
+        assert user_after_del["id"] == user_id
+        assert user_after_del["is_active"] == 1
+
+    def test_database_path_normalized_to_absolute(self):
+        import os
+        from database import Database
+        from config import Config
+        cfg = Config()
+        d = Database(db_path="relative_test.db", config=cfg)
+        assert os.path.isabs(d.db_path)
+        assert d.db_path.endswith("relative_test.db")
+        if os.path.exists(d.db_path):
+            os.remove(d.db_path)
+
+    def test_in_memory_prohibited_in_production(self, monkeypatch):
+        import pytest
+        from database import Database
+        from config import Config
+        cfg = Config()
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.delenv("TESTING", raising=False)
+        # Verify prohibited check
+        with pytest.raises(ValueError, match="strictly prohibited"):
+            Database(db_path=":memory:", config=cfg, force_production_check=True)

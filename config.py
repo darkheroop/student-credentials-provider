@@ -52,10 +52,17 @@ class Config:
 
     # ── Database & Persistence ──────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
-    DATABASE_PATH: str = os.getenv(
-        "DATABASE_PATH",
-        os.path.join("/tmp", "scp.db") if os.getenv("VERCEL") else os.path.join(BASE_DIR, "scp.db"),
-    )
+    _RAW_DB_PATH: str = os.getenv("DATABASE_PATH", "").strip()
+    if not _RAW_DB_PATH:
+        DATABASE_PATH: str = (
+            os.path.join("/tmp", "scp.db") if os.getenv("VERCEL") else os.path.abspath(os.path.join(BASE_DIR, "scp.db"))
+        )
+    elif _RAW_DB_PATH == ":memory:":
+        DATABASE_PATH: str = ":memory:"
+    elif os.path.isabs(_RAW_DB_PATH):
+        DATABASE_PATH: str = os.path.abspath(_RAW_DB_PATH)
+    else:
+        DATABASE_PATH: str = os.path.abspath(os.path.join(BASE_DIR, _RAW_DB_PATH))
     PERSISTENT_SYNC_URL: str | None = os.getenv("PERSISTENT_SYNC_URL")
     GITHUB_TOKEN: str | None = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
     GITHUB_REPO: str | None = os.getenv("GITHUB_REPO", "darkheroop/student-credentials-provider")
