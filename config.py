@@ -48,13 +48,17 @@ class Config:
     )
     ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "inexpert_trifler")
     ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "om sai 0987654321")
+    SUBADMIN_USERS: str | None = os.getenv("SUBADMIN_USERS")
 
-    # ── Database & Failover ─────────────────────────────────────────────
+    # ── Database & Persistence ──────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
     DATABASE_PATH: str = os.getenv(
         "DATABASE_PATH",
         os.path.join("/tmp", "scp.db") if os.getenv("VERCEL") else os.path.join(BASE_DIR, "scp.db"),
     )
+    PERSISTENT_SYNC_URL: str | None = os.getenv("PERSISTENT_SYNC_URL")
+    GITHUB_TOKEN: str | None = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    GITHUB_REPO: str | None = os.getenv("GITHUB_REPO", "darkheroop/student-credentials-provider")
     MAX_FAILOVER_ATTEMPTS: int = int(os.getenv("MAX_FAILOVER_ATTEMPTS", "5"))
     DEFAULT_PAUSE_DURATION_MINUTES: int = int(os.getenv("DEFAULT_PAUSE_DURATION_MINUTES", "60"))
 

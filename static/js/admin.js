@@ -505,6 +505,17 @@ document.addEventListener('DOMContentLoaded', () => {
       item.appendChild(actions);
       subadminsList.appendChild(item);
     });
+
+    // Update suggested SUBADMIN_USERS environment string
+    const subadminEnvCode = document.getElementById('subadminEnvCode');
+    if (subadminEnvCode) {
+      if (subadmins.length > 0) {
+        const pairs = subadmins.map((s) => `${s.username}:YOUR_PASSWORD`).join(',');
+        subadminEnvCode.textContent = `SUBADMIN_USERS=${pairs}`;
+      } else {
+        subadminEnvCode.textContent = 'SUBADMIN_USERS=username:password';
+      }
+    }
   }
 
   async function toggleSubadmin(subId, name) {
@@ -612,6 +623,74 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   refreshSubadminsBtn?.addEventListener('click', loadSubadmins);
+
+  // ── Backup Export / Restore & Persistence ───────────────────────────
+  const exportBackupBtn = document.getElementById('exportBackupBtn');
+  const importBackupTriggerBtn = document.getElementById('importBackupTriggerBtn');
+  const backupFileInput = document.getElementById('backupFileInput');
+  const copyEnvCodeBtn = document.getElementById('copyEnvCodeBtn');
+
+  exportBackupBtn?.addEventListener('click', async () => {
+    try {
+      const res = await apiFetch('/admin/api/backup/export');
+      const data = await res.json();
+      if (data.success) {
+        const blob = new Blob([JSON.stringify(data.backup, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `scp_state_backup_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showAlert('Backup exported and downloaded successfully.', 'success');
+      } else {
+        showAlert('Failed to export backup.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Export error: ${err.message}`, 'error');
+    }
+  });
+
+  importBackupTriggerBtn?.addEventListener('click', () => {
+    backupFileInput?.click();
+  });
+
+  backupFileInput?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const backupJson = JSON.parse(text);
+
+      const res = await apiFetch('/admin/api/backup/import', {
+        method: 'POST',
+        body: JSON.stringify({ backup: backupJson }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        loadSubadmins();
+        loadConfigs();
+        loadClientKeys();
+      } else {
+        showAlert(data.error || 'Failed to import backup.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Import error: ${err.message}`, 'error');
+    } finally {
+      backupFileInput.value = '';
+    }
+  });
+
+  copyEnvCodeBtn?.addEventListener('click', () => {
+    const code = document.getElementById('subadminEnvCode')?.textContent || '';
+    navigator.clipboard.writeText(code).then(() => {
+      showAlert('SUBADMIN_USERS string copied to clipboard! Paste into Vercel Project Settings > Environment Variables to make subadmins permanent.', 'success');
+    });
+  });
 
   // ════════════════════════════════════════════════════════════════════
   // 3. MY ACCOUNT (CHANGE USERNAME AND PASSWORD AFTER LOGIN)

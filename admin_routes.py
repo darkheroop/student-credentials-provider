@@ -74,6 +74,8 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
 
     # Ensure main admin exists at blueprint registration
     db.seed_main_admin_if_empty(config.ADMIN_USERNAME, config.ADMIN_PASSWORD)
+    db.seed_from_state_file()
+    db.seed_subadmins_from_config(config.SUBADMIN_USERS)
 
     def admin_required(f):
         @wraps(f)
@@ -715,6 +717,44 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         return jsonify({
             "success": True,
             "message": f"API key '{target['name']}' permanently deleted.",
+        })
+
+    # ── State Backup, Persistence & Vercel Sync ────────────────────────
+
+    @admin_bp.route("/api/backup/export", methods=["GET"])
+    @main_admin_required
+    def export_backup():
+        """Export full database state as a portable JSON backup (Main Admin only)."""
+        data = db.export_backup()
+        return jsonify({"success": True, "backup": data})
+
+    @admin_bp.route("/api/backup/import", methods=["POST"])
+    @main_admin_required
+    def import_backup():
+        """Import and restore database state from a JSON backup (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        data = request.get_json(silent=True) or {}
+        backup_content = data.get("backup") or data
+        ok, msg = db.import_backup(backup_content)
+        if ok:
+            return jsonify({"success": True, "message": msg})
+        return jsonify({"success": False, "error": msg}), 400
+
+    @admin_bp.route("/api/persistence-info", methods=["GET"])
+    @main_admin_required
+    def get_persistence_info():
+        """Return information about Vercel serverless persistence and subadmins env config."""
+        subadmins = db.get_all_subadmins()
+        sample_env = ",".join([f"{s['username']}:password" for s in subadmins])
+        return jsonify({
+            "success": True,
+            "is_vercel": bool(os.getenv("VERCEL")),
+            "database_path": config.DATABASE_PATH,
+            "subadmin_env_configured": bool(config.SUBADMIN_USERS),
+            "suggested_env_string": sample_env,
+            "subadmins_count": len(subadmins),
         })
 
     return admin_bp

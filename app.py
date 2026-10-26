@@ -38,6 +38,8 @@ db = Database(config=config)
 crypto = CredentialCrypto(secret_key=config.API_ENCRYPTION_KEY)
 db.seed_default_if_empty(crypto)
 db.seed_main_admin_if_empty(config.ADMIN_USERNAME, config.ADMIN_PASSWORD)
+db.seed_from_state_file()
+db.seed_subadmins_from_config(config.SUBADMIN_USERS)
 
 failover_coordinator = ApiFailoverCoordinator(db=db, crypto=crypto, config=config)
 student_lookup_service = StudentLookupService(

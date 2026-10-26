@@ -709,3 +709,223 @@ class Database:
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    # ── Persistence & Serverless State Synchronization ─────────────────
+
+    def seed_subadmins_from_config(self, subadmin_config: str | None) -> list[str]:
+        """
+        Seed subadmin accounts defined in configuration or environment variable.
+        Format: 'username:password,username2:password2' or JSON list of objects.
+        Guarantees subadmins persist across Vercel serverless container restarts.
+        """
+        if not subadmin_config or not str(subadmin_config).strip():
+            return []
+
+        raw = str(subadmin_config).strip()
+        seeded = []
+
+        # 1. Try JSON format
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                items = json.loads(raw)
+                for item in items:
+                    uname = str(item.get("username") or "").strip()
+                    pwd = str(item.get("password") or "").strip()
+                    if uname and pwd:
+                        if self._seed_single_subadmin(uname, pwd):
+                            seeded.append(uname)
+                return seeded
+            except Exception:
+                pass
+
+        # 2. Try comma-separated 'username:password,user2:pass2'
+        pairs = [p.strip() for p in raw.split(",") if p.strip()]
+        for pair in pairs:
+            if ":" in pair:
+                parts = pair.split(":", 1)
+                uname = parts[0].strip()
+                pwd = parts[1].strip()
+                if uname and pwd:
+                    if self._seed_single_subadmin(uname, pwd):
+                        seeded.append(uname)
+
+        return seeded
+
+    def _seed_single_subadmin(self, username: str, password: str) -> bool:
+        """Create or ensure an active subadmin user exists."""
+        user = self.get_user_by_username(username)
+        if not user:
+            hashed = generate_password_hash(password)
+            self.create_user(username=username, password_hash=hashed, role="subadmin", is_active=1)
+            return True
+        elif not user["is_active"]:
+            self.set_user_active_status(user["id"], True)
+            return True
+        return True
+
+    def export_backup(self) -> dict[str, Any]:
+        """
+        Export all subadmins, API configurations, and client API keys into
+        a portable JSON backup structure.
+        """
+        now_iso = _utc_now_iso()
+        subadmins = []
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, username, password_hash, role, is_active, created_at, updated_at
+                FROM admin_users
+                WHERE role = 'subadmin'
+                ORDER BY id ASC
+                """
+            )
+            subadmins = [dict(r) for r in cursor.fetchall()]
+
+        configs = self.get_all_configs()
+        client_keys = self.get_all_client_api_keys()
+
+        return {
+            "version": "1.0",
+            "exported_at": now_iso,
+            "subadmins": subadmins,
+            "api_configurations": configs,
+            "client_api_keys": client_keys,
+        }
+
+    def import_backup(self, backup_data: dict[str, Any]) -> tuple[bool, str]:
+        """
+        Restore subadmins, API configurations, and client API keys from backup data.
+        """
+        if not isinstance(backup_data, dict):
+            return False, "Invalid backup data format."
+
+        restored_subadmins = 0
+        restored_configs = 0
+        restored_keys = 0
+        now_iso = _utc_now_iso()
+
+        # 1. Restore subadmins
+        for sub in backup_data.get("subadmins", []):
+            username = str(sub.get("username") or "").strip()
+            pwd_hash = str(sub.get("password_hash") or "").strip()
+            if username and pwd_hash and username.lower() != self.config.ADMIN_USERNAME.lower():
+                existing = self.get_user_by_username(username)
+                if not existing:
+                    with self.get_connection() as conn:
+                        conn.execute(
+                            """
+                            INSERT INTO admin_users (username, password_hash, role, is_active, created_at, updated_at)
+                            VALUES (?, ?, 'subadmin', ?, ?, ?)
+                            """,
+                            (
+                                username,
+                                pwd_hash,
+                                1 if sub.get("is_active", 1) else 0,
+                                sub.get("created_at") or now_iso,
+                                now_iso,
+                            ),
+                        )
+                        conn.commit()
+                        restored_subadmins += 1
+                else:
+                    self.update_user_credentials(existing["id"], new_password_hash=pwd_hash)
+                    self.set_user_active_status(existing["id"], bool(sub.get("is_active", 1)))
+                    restored_subadmins += 1
+
+        # 2. Restore client API keys
+        for key_obj in backup_data.get("client_api_keys", []):
+            api_key = str(key_obj.get("api_key") or "").strip()
+            name = str(key_obj.get("name") or "").strip()
+            if api_key and name:
+                existing_key = self.get_client_api_key(api_key)
+                if not existing_key:
+                    with self.get_connection() as conn:
+                        conn.execute(
+                            """
+                            INSERT INTO client_api_keys (
+                                name, api_key, is_active, rate_limit_per_minute,
+                                requests_count, last_used_at, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                name,
+                                api_key,
+                                1 if key_obj.get("is_active", 1) else 0,
+                                int(key_obj.get("rate_limit_per_minute", 60)),
+                                int(key_obj.get("requests_count", 0)),
+                                key_obj.get("last_used_at"),
+                                key_obj.get("created_at") or now_iso,
+                                now_iso,
+                            ),
+                        )
+                        conn.commit()
+                        restored_keys += 1
+
+        # 3. Restore API configurations
+        for cfg in backup_data.get("api_configurations", []):
+            display_name = cfg.get("display_name")
+            endpoint = cfg.get("endpoint")
+            enc_cred = cfg.get("encrypted_credential")
+            if display_name and endpoint and enc_cred:
+                existing_cfg = any(c["display_name"] == display_name for c in self.get_all_configs())
+                if not existing_cfg:
+                    self.insert_config(
+                        provider_name=cfg.get("provider_name", "md5decrypt"),
+                        display_name=display_name,
+                        endpoint=endpoint,
+                        encrypted_credential=enc_cred,
+                        priority=cfg.get("priority", 10),
+                        enabled=cfg.get("enabled", 1),
+                        notes=cfg.get("notes", ""),
+                    )
+                    restored_configs += 1
+
+        # Persist a snapshot if possible
+        self.save_state_snapshot()
+
+        return True, f"Restored {restored_subadmins} subadmin(s), {restored_keys} client key(s), and {restored_configs} API provider(s)."
+
+    def seed_from_state_file(self, state_file_path: str | None = None) -> bool:
+        """
+        Seed database from a JSON state file if present (e.g. data/seed_state.json).
+        Guarantees that subadmins pre-saved in the repo survive all cold boots.
+        """
+        path = state_file_path or os.path.join(self.config.BASE_DIR, "data", "seed_state.json")
+        if not os.path.isfile(path):
+            return False
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            ok, _ = self.import_backup(data)
+            return ok
+        except Exception:
+            return False
+
+    def save_state_snapshot(self) -> bool:
+        """
+        Attempt to write a current snapshot to data/seed_state.json or /tmp/seed_state.json.
+        Does not overwrite repo seed file during pytest runs.
+        """
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
+
+        data = self.export_backup()
+        target_path = os.path.join(self.config.BASE_DIR, "data", "seed_state.json")
+        try:
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception:
+            # If filesystem is read-only (like /var/task on Vercel)
+            pass
+
+        # Try /tmp as secondary snapshot location
+        tmp_path = os.path.join("/tmp", "seed_state.json")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception:
+            return False

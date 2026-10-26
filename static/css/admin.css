@@ -664,6 +664,41 @@ body {
   text-decoration: underline;
 }
 
+/* ── Persistence & Serverless Backup ──────────────────────────────── */
+.persistence-notice {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background-color: var(--neutral-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+}
+
+.notice-title {
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+
+.notice-desc {
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.env-code-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  overflow-x: auto;
+}
+
 .hidden {
   display: none !important;
 }

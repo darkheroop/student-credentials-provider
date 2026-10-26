@@ -221,6 +221,36 @@
           </div>
         </section>
       </main>
+
+      <!-- Serverless Persistence & Backup Controls -->
+      <section class="admin-card" style="margin-top: 24px;">
+        <div class="list-header">
+          <div>
+            <h2 class="card-title">Permanent Storage & Backup</h2>
+            <p class="form-hint">
+              Prevent Vercel serverless containers from resetting subadmins during cold restarts.
+            </p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="exportBackupBtn" class="btn btn-sm btn-outline">Export Backup (JSON)</button>
+            <button type="button" id="importBackupTriggerBtn" class="btn btn-sm btn-outline">Restore Backup</button>
+          </div>
+        </div>
+
+        <div id="persistenceNotice" class="persistence-notice">
+          <div class="notice-title">💡 Make Subadmins Permanent across Vercel Restarts:</div>
+          <p class="notice-desc">
+            Vercel serverless containers reset temporary storage when idle. To keep subadmins permanently without external databases, add <code>SUBADMIN_USERS</code> to your <strong>Vercel Project &rarr; Settings &rarr; Environment Variables</strong>:
+          </p>
+          <div class="env-code-box">
+            <code id="subadminEnvCode">SUBADMIN_USERS=username:password</code>
+            <button type="button" id="copyEnvCodeBtn" class="btn-copy-inline">Copy Variable</button>
+          </div>
+        </div>
+
+        <!-- Hidden file input for restore -->
+        <input type="file" id="backupFileInput" accept=".json" style="display: none;">
+      </section>
     </div>
     {% endif %}
 
