@@ -8,6 +8,7 @@ health status tracking, and failover eligibility queries.
 
 import json
 import os
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -90,6 +91,18 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS client_api_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    api_key TEXT UNIQUE NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
+                    requests_count INTEGER NOT NULL DEFAULT 0,
+                    last_used_at TEXT DEFAULT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_api_config_eligibility
                 ON api_configurations(enabled, health_status, priority);
 
@@ -98,6 +111,9 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_admin_users_username
                 ON admin_users(username);
+
+                CREATE INDEX IF NOT EXISTS idx_client_api_keys_key
+                ON client_api_keys(api_key);
             """)
             conn.commit()
 
@@ -596,5 +612,100 @@ class Database:
                 return False
 
             cursor = conn.execute("DELETE FROM admin_users WHERE id = ?", (user_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    # ── Client API Key Management (External Projects) ──────────────────
+
+    def get_all_client_api_keys(self) -> list[dict[str, Any]]:
+        """Retrieve all issued client API keys for external applications."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, name, api_key, is_active, rate_limit_per_minute,
+                       requests_count, last_used_at, created_at, updated_at
+                FROM client_api_keys
+                ORDER BY id DESC
+                """
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_client_api_key(self, api_key: str) -> dict[str, Any] | None:
+        """Lookup a client API key by its exact secret value."""
+        if not api_key:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM client_api_keys WHERE api_key = ?",
+                (api_key.strip(),),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def create_client_api_key(
+        self,
+        name: str,
+        rate_limit_per_minute: int = 60,
+    ) -> dict[str, Any]:
+        """Generate and store a new unique client API key for an external project."""
+        now_iso = _utc_now_iso()
+        api_key = f"scp_live_{secrets.token_hex(20)}"
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO client_api_keys (
+                    name, api_key, is_active, rate_limit_per_minute,
+                    requests_count, last_used_at, created_at, updated_at
+                ) VALUES (?, ?, 1, ?, 0, NULL, ?, ?)
+                """,
+                (name.strip(), api_key, rate_limit_per_minute, now_iso, now_iso),
+            )
+            key_id = cursor.lastrowid
+            conn.commit()
+
+        return {
+            "id": key_id,
+            "name": name.strip(),
+            "api_key": api_key,
+            "is_active": 1,
+            "rate_limit_per_minute": rate_limit_per_minute,
+            "requests_count": 0,
+            "last_used_at": None,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+
+    def set_client_api_key_status(self, key_id: int, is_active: bool) -> bool:
+        """Enable or revoke an external client API key."""
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE client_api_keys SET is_active = ?, updated_at = ? WHERE id = ?",
+                (1 if is_active else 0, now_iso, key_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_client_api_key(self, key_id: int) -> bool:
+        """Permanently delete a client API key."""
+        with self.get_connection() as conn:
+            cursor = conn.execute("DELETE FROM client_api_keys WHERE id = ?", (key_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def record_api_key_usage(self, api_key: str) -> bool:
+        """Increment usage counter and update last_used_at timestamp."""
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE client_api_keys
+                SET requests_count = requests_count + 1,
+                    last_used_at = ?,
+                    updated_at = ?
+                WHERE api_key = ?
+                """,
+                (now_iso, now_iso, api_key.strip()),
+            )
             conn.commit()
             return cursor.rowcount > 0

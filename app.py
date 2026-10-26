@@ -186,6 +186,69 @@ def learn():
 
 # ── API routes ──────────────────────────────────────────────────────────
 
+def _extract_api_key() -> str | None:
+    """Extract API key from X-API-Key header, Authorization header, or query param."""
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        return api_key.strip()
+    auth = request.headers.get("Authorization")
+    if auth and auth.startswith("Bearer "):
+        return auth[7:].strip()
+    return request.args.get("api_key")
+
+
+@app.route("/api/v1/lookup", methods=["POST"])
+def api_v1_external_lookup():
+    """
+    Dedicated REST API endpoint for external applications and third-party websites.
+    Requires authentication via X-API-Key or Authorization: Bearer <key> header.
+    """
+    api_key = _extract_api_key()
+    if not api_key:
+        return jsonify({
+            "success": False,
+            "status": "unauthorized",
+            "error": "Authentication required. Provide your API key via 'X-API-Key' or 'Authorization: Bearer <key>' header.",
+            "docs": "/admin (See External API & Reference in Admin Dashboard)",
+        }), 401
+
+    key_record = db.get_client_api_key(api_key)
+    if not key_record or not key_record.get("is_active"):
+        return jsonify({
+            "success": False,
+            "status": "forbidden",
+            "error": "Invalid or revoked API key. Please check your credentials.",
+        }), 403
+
+    # Record usage
+    db.record_api_key_usage(api_key)
+
+    if not request.is_json:
+        return jsonify({
+            "success": False,
+            "status": "invalid_input",
+            "error": "Content-Type must be application/json.",
+        }), 400
+
+    data = request.get_json(silent=True) or {}
+    lookup_input = data.get("lookup_input") or data.get("hash")
+    algorithm_type = data.get("algorithm_type") or data.get("algorithm") or "md5"
+
+    if not lookup_input or not str(lookup_input).strip():
+        return jsonify({
+            "success": False,
+            "status": "invalid_input",
+            "error": "Missing required field: 'lookup_input'.",
+        }), 400
+
+    result = student_lookup_service.student_lookup(str(lookup_input), str(algorithm_type))
+    if "lookup_result" not in result:
+        result["lookup_result"] = result.get("plaintext")
+
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
+
 @app.route("/api/health", methods=["GET"])
 def api_health():
     """Return a simple health-check payload without exposing secrets."""
@@ -260,6 +323,12 @@ def api_student_lookup():
         }), 400
 
     # ── Perform lookup ──────────────────────────────────────────────
+    api_key = _extract_api_key()
+    if api_key:
+        key_record = db.get_client_api_key(api_key)
+        if key_record and key_record.get("is_active"):
+            db.record_api_key_usage(api_key)
+
     result = student_lookup_service.student_lookup(str(lookup_input), str(algorithm_type))
 
     status_code = 200 if result.get("success") else 400

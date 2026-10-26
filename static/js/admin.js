@@ -53,6 +53,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (tabTarget === 'subadmins') {
         loadSubadmins();
       }
+      if (tabTarget === 'reference') {
+        loadClientKeys();
+        updateCodeSnippets();
+      }
     });
   });
 
@@ -683,9 +687,339 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ════════════════════════════════════════════════════════════════════
+  // 4. EXTERNAL CLIENT API KEYS & CODE EXAMPLES
+  // ════════════════════════════════════════════════════════════════════
+  const clientKeysList = document.getElementById('clientKeysList');
+  const refreshClientKeysBtn = document.getElementById('refreshClientKeysBtn');
+  const createClientKeyForm = document.getElementById('createClientKeyForm');
+  const clientKeyName = document.getElementById('clientKeyName');
+  const clientKeyRateLimit = document.getElementById('clientKeyRateLimit');
+  const createClientKeyBtn = document.getElementById('createClientKeyBtn');
+  const apiBaseUrlDisplay = document.getElementById('apiBaseUrlDisplay');
+  const snippetCode = document.getElementById('snippetCode');
+  const copySnippetBtn = document.getElementById('copySnippetBtn');
+  const snippetTabButtons = document.querySelectorAll('.snippet-tab-btn');
+
+  let activeClientKeys = [];
+  let currentSnippetLanguage = 'curl';
+
+  if (apiBaseUrlDisplay) {
+    apiBaseUrlDisplay.textContent = window.location.origin;
+  }
+
+  async function loadClientKeys() {
+    if (!clientKeysList || userRole !== 'main_admin') return;
+
+    try {
+      clientKeysList.innerHTML = '<p class="empty-state">Loading client API keys...</p>';
+      const res = await apiFetch('/admin/api/client-keys');
+      if (!res.ok) {
+        throw new Error(`Failed to load keys: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      activeClientKeys = data.keys || [];
+      renderClientKeys(activeClientKeys);
+      updateCodeSnippets();
+    } catch (err) {
+      clientKeysList.innerHTML = `<p class="empty-state">Error loading keys: ${err.message}</p>`;
+      showAlert(err.message, 'error');
+    }
+  }
+
+  function renderClientKeys(keys) {
+    if (!clientKeysList) return;
+    clientKeysList.innerHTML = '';
+
+    if (keys.length === 0) {
+      clientKeysList.innerHTML = '<p class="empty-state">No client API keys created yet. Generate one above to allow another project to use this API.</p>';
+      return;
+    }
+
+    keys.forEach((key) => {
+      const item = document.createElement('div');
+      item.className = 'subadmin-item';
+
+      const info = document.createElement('div');
+      info.className = 'subadmin-info';
+
+      const nameLine = document.createElement('div');
+      nameLine.className = 'subadmin-name';
+      nameLine.textContent = key.name;
+
+      const statusBadge = document.createElement('span');
+      statusBadge.className = `status-badge ${key.is_active ? 'status-active' : 'status-disabled'}`;
+      statusBadge.textContent = key.is_active ? 'Active' : 'Revoked';
+      nameLine.appendChild(statusBadge);
+
+      info.appendChild(nameLine);
+
+      const keyDisplay = document.createElement('div');
+      keyDisplay.style.margin = '4px 0';
+      keyDisplay.innerHTML = `
+        <span class="key-token-box">
+          <code>${key.api_key}</code>
+          <button type="button" class="btn-copy-inline" title="Copy API Key" onclick="navigator.clipboard.writeText('${key.api_key}'); alert('API Key copied to clipboard!');">Copy</button>
+        </span>
+      `;
+      info.appendChild(keyDisplay);
+
+      const meta = document.createElement('div');
+      meta.className = 'subadmin-meta';
+      meta.innerHTML = `
+        <span><strong>Rate Limit:</strong> ${key.rate_limit_per_minute} req/min</span> &bull;
+        <span><strong>Usage:</strong> ${key.requests_count} calls</span> &bull;
+        <span><strong>Last Used:</strong> ${key.last_used_at ? new Date(key.last_used_at).toLocaleString() : 'Never'}</span>
+      `;
+      info.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'subadmin-actions';
+
+      // Toggle status button
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'btn btn-sm btn-outline';
+      toggleBtn.textContent = key.is_active ? 'Revoke' : 'Activate';
+      toggleBtn.onclick = () => toggleClientKey(key.id, key.name);
+      actions.appendChild(toggleBtn);
+
+      // Delete button
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn btn-sm btn-danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = () => deleteClientKey(key.id, key.name);
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(info);
+      item.appendChild(actions);
+      clientKeysList.appendChild(item);
+    });
+  }
+
+  async function toggleClientKey(keyId, name) {
+    try {
+      const res = await apiFetch(`/admin/api/client-keys/${keyId}/toggle`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        loadClientKeys();
+      } else {
+        showAlert(data.error || 'Failed to update key status.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  async function deleteClientKey(keyId, name) {
+    if (!confirm(`Are you sure you want to permanently delete the API key for "${name}"? External requests using this key will immediately be rejected.`)) {
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/admin/api/client-keys/${keyId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        loadClientKeys();
+      } else {
+        showAlert(data.error || 'Failed to delete key.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  createClientKeyForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const name = clientKeyName.value.trim();
+    const rateLimit = parseInt(clientKeyRateLimit.value, 10) || 60;
+
+    if (!name) {
+      showAlert('Application or client name is required.', 'error');
+      return;
+    }
+
+    createClientKeyBtn.disabled = true;
+    createClientKeyBtn.textContent = 'Generating...';
+
+    try {
+      const res = await apiFetch('/admin/api/client-keys', {
+        method: 'POST',
+        body: JSON.stringify({ name, rate_limit_per_minute: rateLimit }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        createClientKeyForm.reset();
+        clientKeyRateLimit.value = '60';
+        loadClientKeys();
+      } else {
+        showAlert(data.error || 'Failed to generate key.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    } finally {
+      createClientKeyBtn.disabled = false;
+      createClientKeyBtn.textContent = 'Generate API Key';
+    }
+  });
+
+  refreshClientKeysBtn?.addEventListener('click', loadClientKeys);
+
+  // ── Code Snippets Generation ────────────────────────────────────────
+  function getSampleApiKey() {
+    const active = activeClientKeys.find((k) => k.is_active);
+    return active ? active.api_key : 'scp_live_your_api_key_here';
+  }
+
+  function updateCodeSnippets() {
+    if (!snippetCode) return;
+
+    const origin = window.location.origin || 'https://student-credentials-provider.vercel.app';
+    const apiKey = getSampleApiKey();
+
+    const snippets = {
+      curl: `curl -X POST "${origin}/api/v1/lookup" \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: ${apiKey}" \\
+  -d '{
+    "lookup_input": "098f6bcd4621d373cade4e832627b4f6",
+    "algorithm_type": "md5"
+  }'`,
+
+      python: `import requests
+
+url = "${origin}/api/v1/lookup"
+headers = {
+    "Content-Type": "application/json",
+    "X-API-Key": "${apiKey}"
+}
+payload = {
+    "lookup_input": "098f6bcd4621d373cade4e832627b4f6",
+    "algorithm_type": "md5"
+}
+
+response = requests.post(url, json=payload, headers=headers)
+data = response.json()
+
+if data.get("success") and data.get("status") == "match_found":
+    print("Found credential:", data.get("lookup_result"))
+else:
+    print("Lookup status:", data.get("status"))`,
+
+      javascript: `// Modern Browser or Node.js 18+ (Fetch API)
+async function lookupStudentHash(hash) {
+  const response = await fetch('${origin}/api/v1/lookup', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': '${apiKey}'
+    },
+    body: JSON.stringify({
+      lookup_input: hash,
+      algorithm_type: 'md5'
+    })
+  });
+
+  const data = await response.json();
+  if (data.success && data.status === 'match_found') {
+    console.log('Result:', data.lookup_result);
+  } else {
+    console.log('Not found or error:', data.status);
+  }
+  return data;
+}
+
+// Example usage:
+lookupStudentHash('098f6bcd4621d373cade4e832627b4f6');`,
+
+      nodejs: `// Node.js with Axios
+const axios = require('axios');
+
+async function lookupCredential(hash) {
+  try {
+    const response = await axios.post('${origin}/api/v1/lookup', {
+      lookup_input: hash,
+      algorithm_type: 'md5'
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': '${apiKey}'
+      }
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('Request failed:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+lookupCredential('098f6bcd4621d373cade4e832627b4f6')
+  .then(res => console.log('Response:', res));`,
+
+      php: `<?php
+// PHP cURL Integration Example
+$url = "${origin}/api/v1/lookup";
+$apiKey = "${apiKey}";
+
+$data = [
+    "lookup_input" => "098f6bcd4621d373cade4e832627b4f6",
+    "algorithm_type" => "md5"
+];
+
+$ch = curl_init($url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Content-Type: application/json",
+    "X-API-Key: " . $apiKey
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+$result = json_decode($response, true);
+if ($httpCode === 200 && ($result['status'] ?? '') === 'match_found') {
+    echo "Found credential: " . $result['lookup_result'] . "\\n";
+} else {
+    echo "Lookup completed with status: " . ($result['status'] ?? 'unknown') . "\\n";
+}
+?>`,
+    };
+
+    snippetCode.textContent = snippets[currentSnippetLanguage] || snippets.curl;
+  }
+
+  snippetTabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      snippetTabButtons.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentSnippetLanguage = btn.getAttribute('data-snippet') || 'curl';
+      updateCodeSnippets();
+    });
+  });
+
+  copySnippetBtn?.addEventListener('click', () => {
+    if (!snippetCode) return;
+    navigator.clipboard.writeText(snippetCode.textContent).then(() => {
+      const originalText = copySnippetBtn.textContent;
+      copySnippetBtn.textContent = 'Copied!';
+      setTimeout(() => {
+        copySnippetBtn.textContent = originalText;
+      }, 2000);
+    });
+  });
+
   // Initial load
   loadConfigs();
   if (userRole === 'main_admin') {
     loadSubadmins();
+    loadClientKeys();
   }
+  updateCodeSnippets();
 });

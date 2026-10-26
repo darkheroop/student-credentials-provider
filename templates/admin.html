@@ -34,6 +34,9 @@
         Subadmin Accounts
       </button>
       {% endif %}
+      <button class="tab-btn" data-tab="reference" role="tab" aria-selected="false">
+        External API & Reference
+      </button>
       <button class="tab-btn" data-tab="account" role="tab" aria-selected="false">
         My Account
       </button>
@@ -221,7 +224,151 @@
     </div>
     {% endif %}
 
-    <!-- TAB 3: My Account (Change Username & Password) -->
+    <!-- TAB: External API & Reference -->
+    <div id="tab-pane-reference" class="tab-pane" role="tabpanel">
+      <!-- Top Card: Client API Key Management -->
+      <section class="admin-card" style="margin-bottom: 24px;">
+        <div class="list-header">
+          <div>
+            <h2 class="card-title">External Client API Keys</h2>
+            <p class="form-hint">
+              Generate and manage API keys for other applications, websites, and microservices to consume this Student Credentials Provider API.
+            </p>
+          </div>
+          {% if current_user.role == 'main_admin' %}
+          <button id="refreshClientKeysBtn" class="btn btn-sm btn-outline">Refresh Keys</button>
+          {% endif %}
+        </div>
+
+        {% if current_user.role == 'main_admin' %}
+        <!-- Create API Key Form -->
+        <form id="createClientKeyForm" class="admin-form" style="margin-top: 16px; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border-subtle);" novalidate>
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label for="clientKeyName" class="form-label">Application / Client Name *</label>
+              <input
+                type="text"
+                id="clientKeyName"
+                class="form-input"
+                placeholder="e.g. University Portal, Mobile App Backend"
+                required
+              >
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label for="clientKeyRateLimit" class="form-label">Rate Limit (Req/Min)</label>
+              <input
+                type="number"
+                id="clientKeyRateLimit"
+                class="form-input"
+                value="60"
+                min="10"
+                max="1000"
+              >
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" id="createClientKeyBtn" class="btn btn-primary">
+              Generate API Key
+            </button>
+          </div>
+        </form>
+
+        <!-- Client Keys List -->
+        <div id="clientKeysList" class="configs-list">
+          <p class="empty-state">Loading client API keys...</p>
+        </div>
+        {% else %}
+        <p class="form-hint" style="margin-top: 12px;">
+          API key creation and revocation are reserved for the main administrator (<code>inexpert_trifler</code>). Subadmins can view the integration documentation and code examples below.
+        </p>
+        {% endif %}
+      </section>
+
+      <!-- Bottom Card: Integration Reference & Code Examples -->
+      <section class="admin-card">
+        <h2 class="card-title">API Integration Reference & Code Examples</h2>
+        <p class="form-hint" style="margin-bottom: 20px;">
+          Connect any external website, portal, or backend project to this service using standard HTTP JSON requests.
+        </p>
+
+        <!-- Endpoints & Authentication Summary -->
+        <div class="api-ref-block">
+          <h3 class="api-ref-heading">Endpoint Details</h3>
+          <table class="api-ref-table">
+            <tbody>
+              <tr>
+                <td style="width: 200px;"><strong>Base URL</strong></td>
+                <td><code id="apiBaseUrlDisplay">https://student-credentials-provider.vercel.app</code></td>
+              </tr>
+              <tr>
+                <td><strong>Recommended Endpoint</strong></td>
+                <td><code>POST /api/v1/lookup</code></td>
+              </tr>
+              <tr>
+                <td><strong>Alternative Endpoint</strong></td>
+                <td><code>POST /api/student-lookup</code></td>
+              </tr>
+              <tr>
+                <td><strong>Authentication Headers</strong></td>
+                <td>
+                  <code>X-API-Key: scp_live_your_key_here</code><br>
+                  <em>or</em> <code>Authorization: Bearer scp_live_your_key_here</code>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Content-Type</strong></td>
+                <td><code>application/json</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Request Body Schema -->
+        <div class="api-ref-block">
+          <h3 class="api-ref-heading">Request Payload (JSON)</h3>
+          <pre class="code-box"><code>{
+  "lookup_input": "098f6bcd4621d373cade4e832627b4f6",
+  "algorithm_type": "md5"
+}</code></pre>
+          <ul class="api-params-list">
+            <li><code>lookup_input</code> <em>(string, required)</em>: 32-character hexadecimal MD5 hash (or supported digest: SHA1, SHA256, etc.).</li>
+            <li><code>algorithm_type</code> <em>(string, optional)</em>: Algorithm to evaluate. Defaults to <code>"md5"</code>.</li>
+          </ul>
+        </div>
+
+        <!-- Response Schema -->
+        <div class="api-ref-block">
+          <h3 class="api-ref-heading">Response Example (HTTP 200 - Match Found)</h3>
+          <pre class="code-box"><code>{
+  "success": true,
+  "status": "match_found",
+  "lookup_input": "098f6bcd4621d373cade4e832627b4f6",
+  "algorithm_type": "md5",
+  "lookup_result": "test",
+  "provider_name": "md5decrypt"
+}</code></pre>
+        </div>
+
+        <!-- Code Snippets Tabs -->
+        <div class="api-ref-block">
+          <h3 class="api-ref-heading">Code Examples</h3>
+          <div class="snippet-tabs" role="tablist">
+            <button type="button" class="snippet-tab-btn active" data-snippet="curl">cURL</button>
+            <button type="button" class="snippet-tab-btn" data-snippet="python">Python</button>
+            <button type="button" class="snippet-tab-btn" data-snippet="javascript">JavaScript / Fetch</button>
+            <button type="button" class="snippet-tab-btn" data-snippet="nodejs">Node.js (Axios)</button>
+            <button type="button" class="snippet-tab-btn" data-snippet="php">PHP</button>
+          </div>
+
+          <div class="snippet-container">
+            <button type="button" class="copy-snippet-btn" id="copySnippetBtn">Copy Code</button>
+            <pre class="code-box snippet-pre"><code id="snippetCode"></code></pre>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- TAB: My Account (Change Username & Password) -->
     <div id="tab-pane-account" class="tab-pane" role="tabpanel">
       <div class="account-card-wrapper">
         <section class="admin-card">

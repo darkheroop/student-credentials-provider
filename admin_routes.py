@@ -641,4 +641,80 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
             "message": f"Subadmin '{target['username']}' deleted successfully.",
         })
 
+    # ── Client API Key Management (External Projects) ──────────────────
+
+    @admin_bp.route("/api/client-keys", methods=["GET"])
+    @main_admin_required
+    def list_client_keys():
+        """List all client API keys for external applications (Main Admin only)."""
+        keys = db.get_all_client_api_keys()
+        return jsonify({"success": True, "keys": keys})
+
+    @admin_bp.route("/api/client-keys", methods=["POST"])
+    @main_admin_required
+    def create_client_key():
+        """Generate a new client API key for an external application (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name") or "").strip()
+        rate_limit = data.get("rate_limit_per_minute", 60)
+
+        if not name:
+            return jsonify({"success": False, "error": "Application or client name is required."}), 400
+        if len(name) < 2 or len(name) > 100:
+            return jsonify({"success": False, "error": "Name must be between 2 and 100 characters."}), 400
+
+        try:
+            rate_limit_int = max(1, min(1000, int(rate_limit)))
+        except (ValueError, TypeError):
+            rate_limit_int = 60
+
+        new_key = db.create_client_api_key(name=name, rate_limit_per_minute=rate_limit_int)
+        return jsonify({
+            "success": True,
+            "message": f"API key for '{name}' generated successfully.",
+            "key": new_key,
+        }), 201
+
+    @admin_bp.route("/api/client-keys/<int:key_id>/toggle", methods=["POST"])
+    @main_admin_required
+    def toggle_client_key(key_id: int):
+        """Enable or revoke a client API key (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        all_keys = db.get_all_client_api_keys()
+        target = next((k for k in all_keys if k["id"] == key_id), None)
+        if not target:
+            return jsonify({"success": False, "error": "API key not found."}), 404
+
+        new_status = not bool(target["is_active"])
+        db.set_client_api_key_status(key_id, new_status)
+        action = "activated" if new_status else "revoked"
+        return jsonify({
+            "success": True,
+            "message": f"API key '{target['name']}' has been {action}.",
+            "is_active": new_status,
+        })
+
+    @admin_bp.route("/api/client-keys/<int:key_id>", methods=["DELETE"])
+    @main_admin_required
+    def delete_client_key(key_id: int):
+        """Permanently delete a client API key (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        all_keys = db.get_all_client_api_keys()
+        target = next((k for k in all_keys if k["id"] == key_id), None)
+        if not target:
+            return jsonify({"success": False, "error": "API key not found."}), 404
+
+        db.delete_client_api_key(key_id)
+        return jsonify({
+            "success": True,
+            "message": f"API key '{target['name']}' permanently deleted.",
+        })
+
     return admin_bp

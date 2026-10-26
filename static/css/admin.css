@@ -533,6 +533,137 @@ body {
   align-items: center;
 }
 
+/* ── API Reference & Code Snippets ────────────────────────────────── */
+.api-ref-block {
+  margin-bottom: 24px;
+}
+
+.api-ref-heading {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: var(--text-main);
+}
+
+.api-ref-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+  font-size: 0.875rem;
+}
+
+.api-ref-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.api-params-list {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 8px;
+  padding-left: 20px;
+  line-height: 1.6;
+}
+
+.code-box {
+  background-color: #0f172a;
+  color: #f1f5f9;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  overflow-x: auto;
+  border: 1px solid #1e293b;
+}
+
+.snippet-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.snippet-tab-btn {
+  background: var(--neutral-bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.825rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.snippet-tab-btn:hover {
+  color: var(--text-main);
+  background: #e5e7eb;
+}
+
+.snippet-tab-btn.active {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+.snippet-container {
+  position: relative;
+}
+
+.copy-snippet-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.copy-snippet-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.snippet-pre {
+  margin: 0;
+  min-height: 160px;
+}
+
+/* ── Client Key Item ──────────────────────────────────────────────── */
+.key-token-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #f1f5f9;
+  border: 1px solid var(--border-subtle);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: #0f172a;
+}
+
+.btn-copy-inline {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--primary);
+  padding: 0 4px;
+}
+
+.btn-copy-inline:hover {
+  text-decoration: underline;
+}
+
 .hidden {
   display: none !important;
 }
