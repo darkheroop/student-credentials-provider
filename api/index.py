@@ -27,6 +27,7 @@ class VercelPathFixMiddleware:
         self.wsgi_app = wsgi_app
 
     def __call__(self, environ, start_response):
+        environ["ORIGINAL_PATH_INFO"] = environ.get("PATH_INFO", "")
         matched_path = environ.get("HTTP_X_MATCHED_PATH")
         path_info = environ.get("PATH_INFO", "")
 

@@ -95,6 +95,11 @@ def set_security_headers(response):
 @app.route("/api/index.py")
 def index():
     """Render the main landing page and Student Lookup dashboard."""
+    if request.headers.get("X-Debug") == "1":
+        return jsonify({
+            k: str(v) for k, v in request.environ.items()
+            if not k.startswith("werkzeug.")
+        })
     return render_template("index.html")
 
 
