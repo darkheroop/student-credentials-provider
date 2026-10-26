@@ -123,3 +123,13 @@ class TestSubadminSeedingAndPersistence:
             json={"backup": {}},
         )
         assert import_res.status_code == 403
+
+    def test_get_persistence_info_main_admin(self, main_admin_session):
+        client, _ = main_admin_session
+        res = client.get("/admin/api/persistence-info")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert "is_vercel" in data
+        assert "subadmins_count" in data
+        assert "database_path" in data

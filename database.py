@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -907,7 +908,7 @@ class Database:
         Attempt to write a current snapshot to data/seed_state.json or /tmp/seed_state.json.
         Does not overwrite repo seed file during pytest runs.
         """
-        if os.environ.get("PYTEST_CURRENT_TEST"):
+        if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
             return False
 
         data = self.export_backup()
