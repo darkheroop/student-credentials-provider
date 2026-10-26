@@ -15,12 +15,21 @@ load_dotenv()
 class Config:
     """Central configuration object for the SCP application."""
 
-    # ── MD5Decrypt API ──────────────────────────────────────────────────
-    MD5DECRYPT_API_KEY: str | None = os.getenv("MD5DECRYPT_API_KEY", None)
-    MD5DECRYPT_API_URL: str = "https://md5decrypt.net/en/Api/api.php"
+    # ── External Lookup Provider API ────────────────────────────────────
+    MD5DECRYPT_API_KEY: str | None = os.getenv(
+        "MD5DECRYPT_API_KEY",
+        "md5d_live_155f0730_phEgWCGkD_dYIFpqOeeXCQa-K2Y7xBOAa_CzKxmzDqY",
+    )
+    MD5DECRYPT_API_URL: str = os.getenv(
+        "MD5DECRYPT_API_URL",
+        "https://api.md5decrypt.net/",
+    )
 
     # ── Application mode ────────────────────────────────────────────────
-    STUDENT_LOOKUP_MODE: str = os.getenv("STUDENT_LOOKUP_MODE", os.getenv("HASH_LOOKUP_MODE", "demo"))
+    STUDENT_LOOKUP_MODE: str = os.getenv(
+        "STUDENT_LOOKUP_MODE",
+        os.getenv("HASH_LOOKUP_MODE", "live" if MD5DECRYPT_API_KEY else "demo"),
+    )
     HASH_LOOKUP_MODE: str = STUDENT_LOOKUP_MODE  # Backward compatibility alias
 
     # ── Networking ──────────────────────────────────────────────────────
