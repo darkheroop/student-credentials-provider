@@ -1,36 +1,12 @@
 /**
- * Dynamic API Management Client Script
+ * Dynamic API Management & Admin Dashboard Client Script
  */
 
 document.addEventListener('DOMContentLoaded', () => {
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+  const userRole = document.querySelector('meta[name="user-role"]')?.getAttribute('content') || 'subadmin';
   const alertBox = document.getElementById('alertBox');
-  const configsList = document.getElementById('configsList');
-  const refreshBtn = document.getElementById('refreshBtn');
-
-  // Metrics
-  const metricTotal = document.getElementById('metricTotal');
-  const metricActive = document.getElementById('metricActive');
-  const metricPaused = document.getElementById('metricPaused');
-  const metricDisabled = document.getElementById('metricDisabled');
-
-  // Form elements
-  const apiForm = document.getElementById('apiForm');
-  const formTitle = document.getElementById('formTitle');
-  const formMode = document.getElementById('formMode');
-  const formConfigId = document.getElementById('formConfigId');
-  const displayNameInput = document.getElementById('displayName');
-  const providerNameSelect = document.getElementById('providerName');
-  const priorityInput = document.getElementById('priority');
-  const endpointInput = document.getElementById('endpoint');
-  const credentialInput = document.getElementById('credential');
-  const credentialLabel = document.getElementById('credentialLabel');
-  const credentialHint = document.getElementById('credentialHint');
-  const notesInput = document.getElementById('notes');
-  const saveBtn = document.getElementById('saveBtn');
-  const cancelEditBtn = document.getElementById('cancelEditBtn');
-
-  let currentConfigs = [];
+  const headerUsername = document.getElementById('headerUsername');
 
   function showAlert(message, type = 'success') {
     if (!alertBox) return;
@@ -52,7 +28,66 @@ document.addEventListener('DOMContentLoaded', () => {
     return fetch(url, options);
   }
 
+  // ── Tab Navigation ──────────────────────────────────────────────────
+  const tabButtons = document.querySelectorAll('.tab-btn');
+  const tabPanes = document.querySelectorAll('.tab-pane');
+
+  tabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tabTarget = btn.getAttribute('data-tab');
+
+      tabButtons.forEach((b) => {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      tabPanes.forEach((p) => p.classList.remove('active'));
+
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+
+      const targetPane = document.getElementById(`tab-pane-${tabTarget}`);
+      if (targetPane) {
+        targetPane.classList.add('active');
+      }
+
+      if (tabTarget === 'subadmins') {
+        loadSubadmins();
+      }
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  // 1. API PROVIDERS MANAGEMENT
+  // ════════════════════════════════════════════════════════════════════
+  const configsList = document.getElementById('configsList');
+  const refreshBtn = document.getElementById('refreshBtn');
+
+  // Metrics
+  const metricTotal = document.getElementById('metricTotal');
+  const metricActive = document.getElementById('metricActive');
+  const metricPaused = document.getElementById('metricPaused');
+  const metricDisabled = document.getElementById('metricDisabled');
+
+  // API Form elements
+  const apiForm = document.getElementById('apiForm');
+  const formTitle = document.getElementById('formTitle');
+  const formMode = document.getElementById('formMode');
+  const formConfigId = document.getElementById('formConfigId');
+  const displayNameInput = document.getElementById('displayName');
+  const providerNameSelect = document.getElementById('providerName');
+  const priorityInput = document.getElementById('priority');
+  const endpointInput = document.getElementById('endpoint');
+  const credentialInput = document.getElementById('credential');
+  const credentialLabel = document.getElementById('credentialLabel');
+  const credentialHint = document.getElementById('credentialHint');
+  const notesInput = document.getElementById('notes');
+  const saveBtn = document.getElementById('saveBtn');
+  const cancelEditBtn = document.getElementById('cancelEditBtn');
+
+  let currentConfigs = [];
+
   async function loadConfigs() {
+    if (!configsList) return;
     try {
       configsList.innerHTML = '<p class="empty-state">Loading configured API providers...</p>';
       const res = await apiFetch('/admin/api/configs');
@@ -109,7 +144,6 @@ document.addEventListener('DOMContentLoaded', () => {
         statusDisplay = 'disabled';
       }
 
-      // Format date helper
       const formatDate = (val) => {
         if (!val) return 'Never';
         try {
@@ -191,8 +225,6 @@ document.addEventListener('DOMContentLoaded', () => {
       configsList.appendChild(item);
     });
   }
-
-  // ── Actions ─────────────────────────────────────────────────────────
 
   async function testConnection(configId, btn) {
     const originalText = btn.textContent;
@@ -280,7 +312,6 @@ document.addEventListener('DOMContentLoaded', () => {
     saveBtn.textContent = 'Update Configuration';
     cancelEditBtn.classList.remove('hidden');
 
-    // Scroll smoothly to form
     apiForm.scrollIntoView({ behavior: 'smooth' });
   }
 
@@ -300,7 +331,6 @@ document.addEventListener('DOMContentLoaded', () => {
   cancelEditBtn?.addEventListener('click', resetForm);
   refreshBtn?.addEventListener('click', loadConfigs);
 
-  // ── Form Submission (Create or Edit) ─────────────────────────────────
   apiForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -379,6 +409,283 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ════════════════════════════════════════════════════════════════════
+  // 2. SUBADMIN MANAGEMENT (MAIN ADMIN ONLY)
+  // ════════════════════════════════════════════════════════════════════
+  const createSubadminForm = document.getElementById('createSubadminForm');
+  const subadminUsername = document.getElementById('subadminUsername');
+  const subadminPassword = document.getElementById('subadminPassword');
+  const createSubadminBtn = document.getElementById('createSubadminBtn');
+  const subadminsList = document.getElementById('subadminsList');
+  const refreshSubadminsBtn = document.getElementById('refreshSubadminsBtn');
+
+  async function loadSubadmins() {
+    if (!subadminsList || userRole !== 'main_admin') return;
+
+    try {
+      subadminsList.innerHTML = '<p class="empty-state">Loading subadmin accounts...</p>';
+      const res = await apiFetch('/admin/api/subadmins');
+      if (!res.ok) {
+        throw new Error(`Failed to load subadmins: HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      renderSubadminsList(data.subadmins || []);
+    } catch (err) {
+      subadminsList.innerHTML = `<p class="empty-state">Error loading subadmins: ${err.message}</p>`;
+      showAlert(err.message, 'error');
+    }
+  }
+
+  function renderSubadminsList(subadmins) {
+    if (!subadminsList) return;
+    subadminsList.innerHTML = '';
+
+    if (subadmins.length === 0) {
+      subadminsList.innerHTML = '<p class="empty-state">No subadmins created yet. Use the form to assign a new subadmin.</p>';
+      return;
+    }
+
+    subadmins.forEach((sub) => {
+      const item = document.createElement('div');
+      item.className = 'subadmin-item';
+
+      const info = document.createElement('div');
+      info.className = 'subadmin-info';
+
+      const nameLine = document.createElement('div');
+      nameLine.className = 'subadmin-name';
+      nameLine.textContent = sub.username;
+
+      const roleBadge = document.createElement('span');
+      roleBadge.className = 'header-badge';
+      roleBadge.textContent = 'Subadmin';
+      nameLine.appendChild(roleBadge);
+
+      const statusBadge = document.createElement('span');
+      statusBadge.className = `status-badge ${sub.is_active ? 'status-active' : 'status-disabled'}`;
+      statusBadge.textContent = sub.is_active ? 'Active' : 'Disabled';
+      nameLine.appendChild(statusBadge);
+
+      info.appendChild(nameLine);
+
+      const meta = document.createElement('div');
+      meta.className = 'subadmin-meta';
+      meta.textContent = `Created: ${sub.created_at ? new Date(sub.created_at).toLocaleString() : 'N/A'}`;
+      info.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'subadmin-actions';
+
+      // Toggle status button
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'btn btn-sm btn-outline';
+      toggleBtn.textContent = sub.is_active ? 'Disable' : 'Enable';
+      toggleBtn.onclick = () => toggleSubadmin(sub.id, sub.username);
+      actions.appendChild(toggleBtn);
+
+      // Reset password button
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'btn btn-sm btn-secondary';
+      resetBtn.textContent = 'Reset Password';
+      resetBtn.onclick = () => resetSubadminPassword(sub.id, sub.username);
+      actions.appendChild(resetBtn);
+
+      // Delete button
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn btn-sm btn-danger';
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.onclick = () => deleteSubadmin(sub.id, sub.username);
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(info);
+      item.appendChild(actions);
+      subadminsList.appendChild(item);
+    });
+  }
+
+  async function toggleSubadmin(subId, name) {
+    try {
+      const res = await apiFetch(`/admin/api/subadmins/${subId}/toggle`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        loadSubadmins();
+      } else {
+        showAlert(data.error || 'Failed to update subadmin status.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  async function resetSubadminPassword(subId, name) {
+    const newPassword = prompt(`Enter new password for subadmin "${name}" (minimum 6 characters):`);
+    if (newPassword === null) return; // user cancelled
+
+    if (newPassword.trim().length < 6) {
+      showAlert('New password must be at least 6 characters long.', 'error');
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/admin/api/subadmins/${subId}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ new_password: newPassword.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+      } else {
+        showAlert(data.error || 'Failed to reset password.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  async function deleteSubadmin(subId, name) {
+    if (!confirm(`Are you sure you want to permanently delete the subadmin account "${name}"?`)) {
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/admin/api/subadmins/${subId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        loadSubadmins();
+      } else {
+        showAlert(data.error || 'Failed to delete subadmin.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  createSubadminForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const username = subadminUsername.value.trim();
+    const password = subadminPassword.value.trim();
+
+    if (!username) {
+      showAlert('Username is required.', 'error');
+      return;
+    }
+
+    if (username.length < 3) {
+      showAlert('Username must be at least 3 characters long.', 'error');
+      return;
+    }
+
+    if (!password || password.length < 6) {
+      showAlert('Password must be at least 6 characters long.', 'error');
+      return;
+    }
+
+    createSubadminBtn.disabled = true;
+    createSubadminBtn.textContent = 'Creating...';
+
+    try {
+      const res = await apiFetch('/admin/api/subadmins', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        createSubadminForm.reset();
+        loadSubadmins();
+      } else {
+        showAlert(data.error || 'Failed to create subadmin.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    } finally {
+      createSubadminBtn.disabled = false;
+      createSubadminBtn.textContent = 'Create Subadmin';
+    }
+  });
+
+  refreshSubadminsBtn?.addEventListener('click', loadSubadmins);
+
+  // ════════════════════════════════════════════════════════════════════
+  // 3. MY ACCOUNT (CHANGE USERNAME AND PASSWORD AFTER LOGIN)
+  // ════════════════════════════════════════════════════════════════════
+  const accountForm = document.getElementById('accountForm');
+  const accCurrentPassword = document.getElementById('accCurrentPassword');
+  const accNewUsername = document.getElementById('accNewUsername');
+  const accNewPassword = document.getElementById('accNewPassword');
+  const accConfirmPassword = document.getElementById('accConfirmPassword');
+  const saveAccountBtn = document.getElementById('saveAccountBtn');
+
+  accountForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const currentPassword = accCurrentPassword.value.trim();
+    const newUsername = accNewUsername.value.trim();
+    const newPassword = accNewPassword.value.trim();
+    const confirmPassword = accConfirmPassword.value.trim();
+
+    if (!currentPassword) {
+      showAlert('Current password is required to save account changes.', 'error');
+      return;
+    }
+
+    if (newPassword) {
+      if (newPassword.length < 6) {
+        showAlert('New password must be at least 6 characters long.', 'error');
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        showAlert('New password and confirmation do not match.', 'error');
+        return;
+      }
+    }
+
+    saveAccountBtn.disabled = true;
+    saveAccountBtn.textContent = 'Updating...';
+
+    try {
+      const payload = {
+        current_password: currentPassword,
+      };
+
+      if (newUsername) {
+        payload.new_username = newUsername;
+      }
+      if (newPassword) {
+        payload.new_password = newPassword;
+      }
+
+      const res = await apiFetch('/admin/api/account/update', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message, 'success');
+        if (data.username && headerUsername) {
+          headerUsername.textContent = data.username;
+        }
+        accCurrentPassword.value = '';
+        accNewPassword.value = '';
+        accConfirmPassword.value = '';
+      } else {
+        showAlert(data.error || 'Failed to update credentials.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    } finally {
+      saveAccountBtn.disabled = false;
+      saveAccountBtn.textContent = 'Update Account Credentials';
+    }
+  });
+
   // Initial load
   loadConfigs();
+  if (userRole === 'main_admin') {
+    loadSubadmins();
+  }
 });

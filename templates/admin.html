@@ -4,7 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>API Management — Student Credentials Provider</title>
+  <meta name="user-role" content="{{ current_user.role }}">
+  <meta name="user-name" content="{{ current_user.username }}">
+  <title>Admin Dashboard — Student Credentials Provider</title>
   <link rel="stylesheet" href="/static/css/admin.css">
 </head>
 <body>
@@ -13,136 +15,280 @@
     <header class="admin-header">
       <div class="header-left">
         <h1 class="header-title">Student Credentials Provider</h1>
-        <span class="header-badge">API Management</span>
+        <span class="header-badge">{{ 'Main Admin' if current_user.role == 'main_admin' else 'Subadmin' }}</span>
       </div>
       <div class="header-right">
+        <span class="header-user">Signed in as: <strong id="headerUsername">{{ current_user.username }}</strong></span>
         <a href="/" class="btn-link">&larr; Main Lookup</a>
         <a href="/admin/logout" class="btn-link btn-logout">Log Out</a>
       </div>
     </header>
 
+    <!-- Navigation Tabs -->
+    <nav class="admin-tabs" role="tablist">
+      <button class="tab-btn active" data-tab="apis" role="tab" aria-selected="true">
+        API Providers
+      </button>
+      {% if current_user.role == 'main_admin' %}
+      <button class="tab-btn" data-tab="subadmins" role="tab" aria-selected="false">
+        Subadmin Accounts
+      </button>
+      {% endif %}
+      <button class="tab-btn" data-tab="account" role="tab" aria-selected="false">
+        My Account
+      </button>
+    </nav>
+
     <!-- Notification Banner -->
     <div id="alertBox" class="alert-box hidden" role="status" aria-live="polite"></div>
 
-    <!-- Metrics Summary -->
-    <section class="metrics-grid">
-      <div class="metric-card">
-        <span class="metric-label">Total APIs</span>
-        <span class="metric-value" id="metricTotal">0</span>
-      </div>
-      <div class="metric-card metric-card--active">
-        <span class="metric-label">Active & Ready</span>
-        <span class="metric-value" id="metricActive">0</span>
-      </div>
-      <div class="metric-card metric-card--paused">
-        <span class="metric-label">Paused / Quota Exhausted</span>
-        <span class="metric-value" id="metricPaused">0</span>
-      </div>
-      <div class="metric-card metric-card--disabled">
-        <span class="metric-label">Disabled</span>
-        <span class="metric-value" id="metricDisabled">0</span>
-      </div>
-    </section>
+    <!-- TAB 1: API Providers -->
+    <div id="tab-pane-apis" class="tab-pane active" role="tabpanel">
+      <!-- Metrics Summary -->
+      <section class="metrics-grid">
+        <div class="metric-card">
+          <span class="metric-label">Total APIs</span>
+          <span class="metric-value" id="metricTotal">0</span>
+        </div>
+        <div class="metric-card metric-card--active">
+          <span class="metric-label">Active & Ready</span>
+          <span class="metric-value" id="metricActive">0</span>
+        </div>
+        <div class="metric-card metric-card--paused">
+          <span class="metric-label">Paused / Quota Exhausted</span>
+          <span class="metric-value" id="metricPaused">0</span>
+        </div>
+        <div class="metric-card metric-card--disabled">
+          <span class="metric-label">Disabled</span>
+          <span class="metric-value" id="metricDisabled">0</span>
+        </div>
+      </section>
 
-    <!-- Main Content Grid -->
-    <main class="admin-grid">
-      <!-- Add / Edit Form Card -->
-      <section class="admin-card form-card">
-        <h2 class="card-title" id="formTitle">Add API Configuration</h2>
-        <form id="apiForm" class="admin-form" novalidate>
-          <input type="hidden" id="formMode" value="create">
-          <input type="hidden" id="formConfigId" value="">
-
-          <div class="form-group">
-            <label for="displayName" class="form-label">Display Name *</label>
-            <input
-              type="text"
-              id="displayName"
-              class="form-input"
-              placeholder="e.g. MD5Decrypt Secondary"
-              required
-            >
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label for="providerName" class="form-label">Provider *</label>
-              <select id="providerName" class="form-input">
-                <option value="md5decrypt">MD5Decrypt</option>
-              </select>
-            </div>
+      <!-- Main Content Grid -->
+      <main class="admin-grid">
+        <!-- Add / Edit Form Card -->
+        <section class="admin-card form-card">
+          <h2 class="card-title" id="formTitle">Add API Configuration</h2>
+          <form id="apiForm" class="admin-form" novalidate>
+            <input type="hidden" id="formMode" value="create">
+            <input type="hidden" id="formConfigId" value="">
 
             <div class="form-group">
-              <label for="priority" class="form-label">Priority (Lower = Higher)</label>
+              <label for="displayName" class="form-label">Display Name *</label>
               <input
-                type="number"
-                id="priority"
+                type="text"
+                id="displayName"
                 class="form-input"
-                value="10"
-                min="1"
-                max="100"
+                placeholder="e.g. MD5Decrypt Secondary"
+                required
               >
             </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="providerName" class="form-label">Provider *</label>
+                <select id="providerName" class="form-input">
+                  <option value="md5decrypt">MD5Decrypt</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="priority" class="form-label">Priority (Lower = Higher)</label>
+                <input
+                  type="number"
+                  id="priority"
+                  class="form-input"
+                  value="10"
+                  min="1"
+                  max="100"
+                >
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="endpoint" class="form-label">Endpoint URL *</label>
+              <input
+                type="url"
+                id="endpoint"
+                class="form-input"
+                value="https://api.md5decrypt.net/"
+                required
+              >
+            </div>
+
+            <div class="form-group">
+              <label for="credential" class="form-label" id="credentialLabel">API Key / Credential *</label>
+              <input
+                type="password"
+                id="credential"
+                class="form-input"
+                placeholder="Paste provider API key"
+                autocomplete="new-password"
+              >
+              <small class="form-hint" id="credentialHint">
+                Key is encrypted at rest using HMAC-SHA256 authenticated encryption.
+              </small>
+            </div>
+
+            <div class="form-group">
+              <label for="notes" class="form-label">Notes (Optional)</label>
+              <input
+                type="text"
+                id="notes"
+                class="form-input"
+                placeholder="e.g. Account quota resets at 00:00 UTC"
+              >
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" id="saveBtn" class="btn btn-primary">
+                Save Configuration
+              </button>
+              <button type="button" id="cancelEditBtn" class="btn btn-secondary hidden">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <!-- Configured APIs List -->
+        <section class="admin-card list-card">
+          <div class="list-header">
+            <h2 class="card-title">Configured Providers</h2>
+            <button id="refreshBtn" class="btn btn-sm btn-outline">Refresh</button>
           </div>
 
-          <div class="form-group">
-            <label for="endpoint" class="form-label">Endpoint URL *</label>
-            <input
-              type="url"
-              id="endpoint"
-              class="form-input"
-              value="https://api.md5decrypt.net/"
-              required
-            >
+          <div id="configsList" class="configs-list">
+            <p class="empty-state">Loading configured API providers...</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    {% if current_user.role == 'main_admin' %}
+    <!-- TAB 2: Subadmins (Main Admin Only) -->
+    <div id="tab-pane-subadmins" class="tab-pane" role="tabpanel">
+      <main class="admin-grid">
+        <!-- Create Subadmin Card -->
+        <section class="admin-card form-card">
+          <h2 class="card-title">Create Subadmin</h2>
+          <form id="createSubadminForm" class="admin-form" novalidate>
+            <div class="form-group">
+              <label for="subadminUsername" class="form-label">Username *</label>
+              <input
+                type="text"
+                id="subadminUsername"
+                class="form-input"
+                placeholder="e.g. subadmin_user"
+                required
+                autocomplete="off"
+              >
+              <small class="form-hint">Must be at least 3 characters (letters, numbers, underscores).</small>
+            </div>
+
+            <div class="form-group">
+              <label for="subadminPassword" class="form-label">Password *</label>
+              <input
+                type="password"
+                id="subadminPassword"
+                class="form-input"
+                placeholder="Initial password (min 6 characters)"
+                required
+                autocomplete="new-password"
+              >
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" id="createSubadminBtn" class="btn btn-primary">
+                Create Subadmin
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <!-- Managed Subadmins List -->
+        <section class="admin-card list-card">
+          <div class="list-header">
+            <h2 class="card-title">Subadmin Accounts</h2>
+            <button id="refreshSubadminsBtn" class="btn btn-sm btn-outline">Refresh</button>
           </div>
 
-          <div class="form-group">
-            <label for="credential" class="form-label" id="credentialLabel">API Key / Credential *</label>
-            <input
-              type="password"
-              id="credential"
-              class="form-input"
-              placeholder="Paste provider API key"
-              autocomplete="new-password"
-            >
-            <small class="form-hint" id="credentialHint">
-              Key is encrypted at rest using HMAC-SHA256 authenticated encryption.
-            </small>
+          <div id="subadminsList" class="configs-list">
+            <p class="empty-state">Loading subadmin accounts...</p>
           </div>
+        </section>
+      </main>
+    </div>
+    {% endif %}
 
-          <div class="form-group">
-            <label for="notes" class="form-label">Notes (Optional)</label>
-            <input
-              type="text"
-              id="notes"
-              class="form-input"
-              placeholder="e.g. Account quota resets at 00:00 UTC"
-            >
-          </div>
+    <!-- TAB 3: My Account (Change Username & Password) -->
+    <div id="tab-pane-account" class="tab-pane" role="tabpanel">
+      <div class="account-card-wrapper">
+        <section class="admin-card">
+          <h2 class="card-title">Update Your Account Credentials</h2>
+          <p class="form-hint" style="margin-bottom: 20px;">
+            Change your account username and/or password. For security, your current password is required to verify this change.
+          </p>
 
-          <div class="form-actions">
-            <button type="submit" id="saveBtn" class="btn btn-primary">
-              Save Configuration
-            </button>
-            <button type="button" id="cancelEditBtn" class="btn btn-secondary hidden">
-              Cancel
-            </button>
-          </div>
-        </form>
-      </section>
+          <form id="accountForm" class="admin-form" novalidate>
+            <div class="form-group">
+              <label for="accCurrentPassword" class="form-label">Current Password *</label>
+              <input
+                type="password"
+                id="accCurrentPassword"
+                class="form-input"
+                placeholder="Enter current password to verify identity"
+                required
+                autocomplete="current-password"
+              >
+            </div>
 
-      <!-- Configured APIs List -->
-      <section class="admin-card list-card">
-        <div class="list-header">
-          <h2 class="card-title">Configured Providers</h2>
-          <button id="refreshBtn" class="btn btn-sm btn-outline">Refresh</button>
-        </div>
+            <div class="form-group">
+              <label for="accNewUsername" class="form-label">New Username</label>
+              <input
+                type="text"
+                id="accNewUsername"
+                class="form-input"
+                value="{{ current_user.username }}"
+                placeholder="Enter new username"
+                autocomplete="username"
+              >
+              <small class="form-hint">Leave unchanged if you only wish to change your password.</small>
+            </div>
 
-        <div id="configsList" class="configs-list">
-          <p class="empty-state">Loading configured API providers...</p>
-        </div>
-      </section>
-    </main>
+            <div class="form-group">
+              <label for="accNewPassword" class="form-label">New Password</label>
+              <input
+                type="password"
+                id="accNewPassword"
+                class="form-input"
+                placeholder="Leave blank to keep your current password"
+                autocomplete="new-password"
+              >
+              <small class="form-hint">Minimum 6 characters.</small>
+            </div>
+
+            <div class="form-group">
+              <label for="accConfirmPassword" class="form-label">Confirm New Password</label>
+              <input
+                type="password"
+                id="accConfirmPassword"
+                class="form-input"
+                placeholder="Re-enter new password"
+                autocomplete="new-password"
+              >
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" id="saveAccountBtn" class="btn btn-primary">
+                Update Account Credentials
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+
   </div>
 
   <script src="/static/js/admin.js"></script>

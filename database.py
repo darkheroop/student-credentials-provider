@@ -12,6 +12,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from werkzeug.security import generate_password_hash, check_password_hash
+
 from config import Config
 from services.crypto import CredentialCrypto
 
@@ -78,11 +80,24 @@ class Database:
                     FOREIGN KEY (api_config_id) REFERENCES api_configurations(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS admin_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'subadmin',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_api_config_eligibility
                 ON api_configurations(enabled, health_status, priority);
 
                 CREATE INDEX IF NOT EXISTS idx_api_event_history_config
                 ON api_event_history(api_config_id, timestamp);
+
+                CREATE INDEX IF NOT EXISTS idx_admin_users_username
+                ON admin_users(username);
             """)
             conn.commit()
 
@@ -400,3 +415,186 @@ class Database:
             notes="Initial default provider seeded from environment variable.",
         )
         return True
+
+    # ── Admin User Management ──────────────────────────────────────────
+
+    def seed_main_admin_if_empty(self, username: str, password: str) -> bool:
+        """
+        Ensure the default main administrator account exists.
+        If no user with role 'main_admin' exists, creates or updates the record.
+        """
+        if not username or not password:
+            return False
+
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM admin_users WHERE role = 'main_admin' LIMIT 1"
+            )
+            existing_main = cursor.fetchone()
+            if existing_main:
+                return False
+
+            now_iso = _utc_now_iso()
+            hashed = generate_password_hash(password)
+
+            # Check if username exists already
+            cursor = conn.execute(
+                "SELECT * FROM admin_users WHERE username = ?", (username.strip(),)
+            )
+            user_exists = cursor.fetchone()
+
+            if user_exists:
+                conn.execute(
+                    """
+                    UPDATE admin_users
+                    SET password_hash = ?, role = 'main_admin', is_active = 1, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (hashed, now_iso, user_exists["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO admin_users (username, password_hash, role, is_active, created_at, updated_at)
+                    VALUES (?, ?, 'main_admin', 1, ?, ?)
+                    """,
+                    (username.strip(), hashed, now_iso, now_iso),
+                )
+            conn.commit()
+            return True
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        """Retrieve user record by username (case-insensitive)."""
+        if not username:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM admin_users WHERE username = ?", (username.strip(),)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
+        """Retrieve user record by primary key ID."""
+        if not user_id:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM admin_users WHERE id = ?", (user_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_all_subadmins(self) -> list[dict[str, Any]]:
+        """Retrieve all subadmin users without exposing password hashes."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, username, role, is_active, created_at, updated_at
+                FROM admin_users
+                WHERE role = 'subadmin'
+                ORDER BY id ASC
+                """
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def is_username_taken(self, username: str, exclude_user_id: int | None = None) -> bool:
+        """Check if a username is already registered to another user."""
+        if not username:
+            return False
+        with self.get_connection() as conn:
+            if exclude_user_id is not None:
+                cursor = conn.execute(
+                    "SELECT 1 FROM admin_users WHERE username = ? AND id != ?",
+                    (username.strip(), exclude_user_id),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT 1 FROM admin_users WHERE username = ?",
+                    (username.strip(),),
+                )
+            return cursor.fetchone() is not None
+
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        role: str = "subadmin",
+        is_active: int = 1,
+    ) -> int:
+        """Create a new admin or subadmin user."""
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO admin_users (username, password_hash, role, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (username.strip(), password_hash, role, 1 if is_active else 0, now_iso, now_iso),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def update_user_credentials(
+        self,
+        user_id: int,
+        new_username: str | None = None,
+        new_password_hash: str | None = None,
+    ) -> bool:
+        """Update username and/or password hash for an admin or subadmin."""
+        now_iso = _utc_now_iso()
+        fields = []
+        params = []
+        if new_username is not None and str(new_username).strip():
+            fields.append("username = ?")
+            params.append(str(new_username).strip())
+        if new_password_hash is not None and str(new_password_hash).strip():
+            fields.append("password_hash = ?")
+            params.append(str(new_password_hash).strip())
+
+        if not fields:
+            return False
+
+        fields.append("updated_at = ?")
+        params.append(now_iso)
+        params.append(user_id)
+
+        query = f"UPDATE admin_users SET {', '.join(fields)} WHERE id = ?"
+        with self.get_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def set_user_active_status(self, user_id: int, is_active: bool) -> bool:
+        """
+        Enable or disable a subadmin account.
+        Disabling main_admin is strictly prohibited.
+        """
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            cursor = conn.execute("SELECT role FROM admin_users WHERE id = ?", (user_id,))
+            user = cursor.fetchone()
+            if not user or user["role"] == "main_admin":
+                return False
+
+            cursor = conn.execute(
+                "UPDATE admin_users SET is_active = ?, updated_at = ? WHERE id = ?",
+                (1 if is_active else 0, now_iso, user_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_subadmin(self, user_id: int) -> bool:
+        """
+        Delete a subadmin account.
+        Deleting main_admin is strictly prohibited.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute("SELECT role FROM admin_users WHERE id = ?", (user_id,))
+            user = cursor.fetchone()
+            if not user or user["role"] == "main_admin":
+                return False
+
+            cursor = conn.execute("DELETE FROM admin_users WHERE id = ?", (user_id,))
+            conn.commit()
+            return cursor.rowcount > 0

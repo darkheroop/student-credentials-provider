@@ -6,6 +6,7 @@ and CRUD endpoints for API configurations and failover controls.
 """
 
 import ipaddress
+import re
 import secrets
 from functools import wraps
 from urllib.parse import urlparse
@@ -19,6 +20,7 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import Config
 from database import Database
@@ -70,6 +72,9 @@ def _validate_endpoint_url(url: str) -> tuple[bool, str]:
 def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blueprint:
     """Factory function to bind database and crypto dependencies to the admin blueprint."""
 
+    # Ensure main admin exists at blueprint registration
+    db.seed_main_admin_if_empty(config.ADMIN_USERNAME, config.ADMIN_PASSWORD)
+
     def admin_required(f):
         @wraps(f)
         def decorated(*args, **kwargs):
@@ -77,6 +82,39 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
                 if request.is_json or request.path.startswith("/admin/api/"):
                     return jsonify({"success": False, "error": "Authentication required."}), 401
                 return redirect(url_for("admin.login_page"))
+
+            user_id = session.get("user_id")
+            if user_id:
+                user = db.get_user_by_id(user_id)
+                if not user or not user["is_active"]:
+                    session.clear()
+                    if request.is_json or request.path.startswith("/admin/api/"):
+                        return jsonify({"success": False, "error": "Account is inactive or has been disabled."}), 401
+                    return redirect(url_for("admin.login_page"))
+            return f(*args, **kwargs)
+        return decorated
+
+    def main_admin_required(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not session.get("admin_authenticated"):
+                if request.is_json or request.path.startswith("/admin/api/"):
+                    return jsonify({"success": False, "error": "Authentication required."}), 401
+                return redirect(url_for("admin.login_page"))
+
+            user_id = session.get("user_id")
+            user = db.get_user_by_id(user_id) if user_id else None
+            if not user or not user["is_active"]:
+                session.clear()
+                if request.is_json or request.path.startswith("/admin/api/"):
+                    return jsonify({"success": False, "error": "Account is inactive or has been disabled."}), 401
+                return redirect(url_for("admin.login_page"))
+
+            if user["role"] != "main_admin":
+                if request.is_json or request.path.startswith("/admin/api/"):
+                    return jsonify({"success": False, "error": "Main administrator privileges required."}), 403
+                return jsonify({"success": False, "error": "Access denied. Main administrator privileges required."}), 403
+
             return f(*args, **kwargs)
         return decorated
 
@@ -109,13 +147,43 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         username = (data.get("username") or "").strip()
         password = (data.get("password") or "").strip()
 
-        if username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD:
-            session["admin_authenticated"] = True
-            session["csrf_token"] = secrets.token_hex(16)
-
+        if not username or not password:
+            error_msg = "Username and password are required."
             if request.is_json:
-                return jsonify({"success": True, "csrf_token": session["csrf_token"]})
-            return redirect(url_for("admin.dashboard"))
+                return jsonify({"success": False, "error": error_msg}), 400
+            return render_template("admin_login.html", error=error_msg), 400
+
+        user = db.get_user_by_username(username)
+        # Ensure default main admin is seeded if not present
+        if not user and username.lower() == config.ADMIN_USERNAME.lower() and password == config.ADMIN_PASSWORD:
+            db.seed_main_admin_if_empty(config.ADMIN_USERNAME, config.ADMIN_PASSWORD)
+            user = db.get_user_by_username(username)
+
+        if user:
+            if not user["is_active"]:
+                error_msg = "This account has been disabled. Please contact the main administrator."
+                if request.is_json:
+                    return jsonify({"success": False, "error": error_msg}), 403
+                return render_template("admin_login.html", error=error_msg), 403
+
+            if check_password_hash(user["password_hash"], password):
+                session["admin_authenticated"] = True
+                session["user_id"] = user["id"]
+                session["username"] = user["username"]
+                session["role"] = user["role"]
+                session["csrf_token"] = secrets.token_hex(16)
+
+                if request.is_json:
+                    return jsonify({
+                        "success": True,
+                        "csrf_token": session["csrf_token"],
+                        "user": {
+                            "id": user["id"],
+                            "username": user["username"],
+                            "role": user["role"],
+                        },
+                    })
+                return redirect(url_for("admin.dashboard"))
 
         error_msg = "Invalid username or password."
         if request.is_json:
@@ -135,7 +203,16 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
     @admin_required
     def dashboard():
         """Render API Management dashboard."""
-        return render_template("admin.html", csrf_token=session.get("csrf_token", ""))
+        user = db.get_user_by_id(session.get("user_id"))
+        return render_template(
+            "admin.html",
+            csrf_token=session.get("csrf_token", ""),
+            current_user={
+                "id": user["id"] if user else session.get("user_id"),
+                "username": user["username"] if user else session.get("username", "admin"),
+                "role": user["role"] if user else session.get("role", "subadmin"),
+            },
+        )
 
     # ── API Management REST Endpoints ───────────────────────────────────
 
@@ -369,5 +446,199 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         """Retrieve recent sanitized events for an API configuration."""
         events = db.get_events_for_config(config_id, limit=30)
         return jsonify({"success": True, "events": events})
+
+    # ── User Profile & Account Credentials Management ───────────────────
+
+    @admin_bp.route("/api/me", methods=["GET"])
+    @admin_required
+    def get_current_user():
+        """Return profile information of current logged-in user."""
+        user = db.get_user_by_id(session.get("user_id"))
+        if not user:
+            return jsonify({"success": False, "error": "User not found."}), 404
+        return jsonify({
+            "success": True,
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "role": user["role"],
+            },
+        })
+
+    @admin_bp.route("/api/account/update", methods=["POST"])
+    @admin_required
+    def update_account_credentials():
+        """
+        Allow an authenticated user (main admin or subadmin) to update their
+        own username and/or password after verifying their current password.
+        """
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        user = db.get_user_by_id(session.get("user_id"))
+        if not user:
+            return jsonify({"success": False, "error": "User not found."}), 404
+
+        data = request.get_json(silent=True) or {}
+        current_password = str(data.get("current_password") or "").strip()
+        new_username = str(data.get("new_username") or "").strip()
+        new_password = str(data.get("new_password") or "").strip()
+
+        if not current_password:
+            return jsonify({"success": False, "error": "Current password is required to save changes."}), 400
+
+        if not check_password_hash(user["password_hash"], current_password):
+            return jsonify({"success": False, "error": "Incorrect current password."}), 400
+
+        has_change = False
+        username_to_set = None
+        password_hash_to_set = None
+
+        if new_username and new_username.lower() != user["username"].lower():
+            if len(new_username) < 3 or len(new_username) > 50:
+                return jsonify({"success": False, "error": "New username must be between 3 and 50 characters."}), 400
+            if not re.match(r"^[a-zA-Z0-9_\-\. ]+$", new_username):
+                return jsonify({"success": False, "error": "Username contains invalid characters."}), 400
+            if db.is_username_taken(new_username, exclude_user_id=user["id"]):
+                return jsonify({"success": False, "error": f"Username '{new_username}' is already in use."}), 400
+            username_to_set = new_username
+            has_change = True
+
+        if new_password:
+            if len(new_password) < 6:
+                return jsonify({"success": False, "error": "New password must be at least 6 characters long."}), 400
+            password_hash_to_set = generate_password_hash(new_password)
+            has_change = True
+
+        if not has_change:
+            return jsonify({"success": False, "error": "No credential changes were provided."}), 400
+
+        db.update_user_credentials(
+            user_id=user["id"],
+            new_username=username_to_set,
+            new_password_hash=password_hash_to_set,
+        )
+
+        if username_to_set:
+            session["username"] = username_to_set
+
+        return jsonify({
+            "success": True,
+            "message": "Account credentials updated successfully.",
+            "username": session["username"],
+        })
+
+    # ── Subadmin Management (Main Admin Only) ───────────────────────────
+
+    @admin_bp.route("/api/subadmins", methods=["GET"])
+    @main_admin_required
+    def list_subadmins():
+        """List all subadmin accounts (Main Admin only)."""
+        subadmins = db.get_all_subadmins()
+        return jsonify({"success": True, "subadmins": subadmins})
+
+    @admin_bp.route("/api/subadmins", methods=["POST"])
+    @main_admin_required
+    def create_subadmin():
+        """Create a new subadmin account (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        data = request.get_json(silent=True) or {}
+        username = str(data.get("username") or "").strip()
+        password = str(data.get("password") or "").strip()
+
+        if not username:
+            return jsonify({"success": False, "error": "Username is required."}), 400
+        if len(username) < 3 or len(username) > 50:
+            return jsonify({"success": False, "error": "Username must be between 3 and 50 characters."}), 400
+        if not re.match(r"^[a-zA-Z0-9_\-\. ]+$", username):
+            return jsonify({"success": False, "error": "Username contains invalid characters."}), 400
+        if db.is_username_taken(username):
+            return jsonify({"success": False, "error": f"Username '{username}' is already taken."}), 400
+
+        if not password or len(password) < 6:
+            return jsonify({"success": False, "error": "Password must be at least 6 characters long."}), 400
+
+        hashed = generate_password_hash(password)
+        new_id = db.create_user(
+            username=username,
+            password_hash=hashed,
+            role="subadmin",
+            is_active=1,
+        )
+
+        return jsonify({
+            "success": True,
+            "message": f"Subadmin '{username}' created successfully.",
+            "id": new_id,
+        }), 201
+
+    @admin_bp.route("/api/subadmins/<int:user_id>/toggle", methods=["POST"])
+    @main_admin_required
+    def toggle_subadmin_status(user_id: int):
+        """Toggle active/disabled status for a subadmin (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        target = db.get_user_by_id(user_id)
+        if not target:
+            return jsonify({"success": False, "error": "Subadmin not found."}), 404
+        if target["role"] == "main_admin":
+            return jsonify({"success": False, "error": "Main administrator account cannot be disabled."}), 403
+
+        new_status = not bool(target["is_active"])
+        db.set_user_active_status(user_id, new_status)
+        action = "enabled" if new_status else "disabled"
+        return jsonify({
+            "success": True,
+            "message": f"Subadmin '{target['username']}' account {action}.",
+            "is_active": new_status,
+        })
+
+    @admin_bp.route("/api/subadmins/<int:user_id>/reset-password", methods=["POST"])
+    @main_admin_required
+    def reset_subadmin_password(user_id: int):
+        """Reset password for a subadmin (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        target = db.get_user_by_id(user_id)
+        if not target:
+            return jsonify({"success": False, "error": "Subadmin not found."}), 404
+        if target["role"] == "main_admin":
+            return jsonify({"success": False, "error": "Cannot reset password for main administrator here."}), 403
+
+        data = request.get_json(silent=True) or {}
+        new_password = str(data.get("new_password") or "").strip()
+        if not new_password or len(new_password) < 6:
+            return jsonify({"success": False, "error": "New password must be at least 6 characters long."}), 400
+
+        hashed = generate_password_hash(new_password)
+        db.update_user_credentials(user_id=user_id, new_password_hash=hashed)
+
+        return jsonify({
+            "success": True,
+            "message": f"Password for subadmin '{target['username']}' has been reset successfully.",
+        })
+
+    @admin_bp.route("/api/subadmins/<int:user_id>", methods=["DELETE"])
+    @main_admin_required
+    def delete_subadmin(user_id: int):
+        """Delete a subadmin account (Main Admin only)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        target = db.get_user_by_id(user_id)
+        if not target:
+            return jsonify({"success": False, "error": "Subadmin not found."}), 404
+        if target["role"] == "main_admin":
+            return jsonify({"success": False, "error": "Main administrator account cannot be deleted."}), 403
+
+        db.delete_subadmin(user_id)
+        return jsonify({
+            "success": True,
+            "message": f"Subadmin '{target['username']}' deleted successfully.",
+        })
 
     return admin_bp
