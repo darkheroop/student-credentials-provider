@@ -54,11 +54,21 @@ class Config:
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
     # Primary managed database URL (Neon PostgreSQL on Vercel)
-    DATABASE_URL: str | None = (
+    _RAW_PG_URL: str | None = (
         os.getenv("DATABASE_URL")
+        or os.getenv("DATABASE_URL_UNPOOLED")
         or os.getenv("DATABASE_POSTGRES_URL")
         or os.getenv("POSTGRES_URL")
+        or os.getenv("DATABASE_POSTGRES_PRISMA_URL")
     )
+    if not _RAW_PG_URL and os.getenv("DATABASE_POSTGRES_HOST"):
+        _pg_host = os.getenv("DATABASE_POSTGRES_HOST")
+        _pg_user = os.getenv("DATABASE_POSTGRES_USER") or "default"
+        _pg_pass = os.getenv("DATABASE_POSTGRES_PASSWORD") or ""
+        _pg_db = os.getenv("DATABASE_POSTGRES_DATABASE") or "neondb"
+        _RAW_PG_URL = f"postgresql://{_pg_user}:{_pg_pass}@{_pg_host}/{_pg_db}?sslmode=require"
+
+    DATABASE_URL: str | None = _RAW_PG_URL
     DATABASE_URL_UNPOOLED: str | None = os.getenv("DATABASE_URL_UNPOOLED")
 
     # Discrete Neon / Postgres connection settings

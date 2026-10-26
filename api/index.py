@@ -5,6 +5,7 @@ Exports the Flask application for Vercel's Python runtime.
 
 import sys
 import os
+import traceback
 from urllib.parse import parse_qs, urlencode
 
 # Ensure the root project directory is on the Python module search path
@@ -12,7 +13,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from app import app
+_app_instance = None
+_init_error = None
+
+try:
+    from app import app as _flask_app
+    _app_instance = _flask_app
+except Exception:
+    _init_error = traceback.format_exc()
 
 
 class VercelPathFixMiddleware:
@@ -28,6 +36,10 @@ class VercelPathFixMiddleware:
         self.wsgi_app = wsgi_app
 
     def __call__(self, environ, start_response):
+        if _init_error:
+            start_response("500 Internal Server Error", [("Content-Type", "text/plain; charset=utf-8")])
+            return [f"Serverless Init Error:\n{_init_error}".encode("utf-8")]
+
         qs_raw = environ.get("QUERY_STRING", "")
         if "__path=" in qs_raw or qs_raw.startswith("__path"):
             qs = parse_qs(qs_raw, keep_blank_values=True)
@@ -56,11 +68,22 @@ class VercelPathFixMiddleware:
         if not environ.get("PATH_INFO"):
             environ["PATH_INFO"] = "/"
 
-        return self.wsgi_app(environ, start_response)
+        try:
+            return self.wsgi_app(environ, start_response)
+        except Exception:
+            err = traceback.format_exc()
+            start_response("500 Internal Server Error", [("Content-Type", "text/plain; charset=utf-8")])
+            return [f"Serverless Request Error:\n{err}".encode("utf-8")]
 
 
-# Apply middleware to Flask application
-app.wsgi_app = VercelPathFixMiddleware(app.wsgi_app)
+if _app_instance is not None:
+    _app_instance.wsgi_app = VercelPathFixMiddleware(_app_instance.wsgi_app)
+    app = _app_instance
+    application = _app_instance
+else:
+    def _fallback_app(environ, start_response):
+        start_response("500 Internal Server Error", [("Content-Type", "text/plain; charset=utf-8")])
+        return [f"Serverless Startup Error:\n{_init_error}".encode("utf-8")]
 
-# Export for WSGI / ASGI runners
-application = app
+    app = _fallback_app
+    application = _fallback_app

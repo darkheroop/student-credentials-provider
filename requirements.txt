@@ -4,4 +4,6 @@ requests==2.32.3
 pytest==8.3.4
 Flask-Cors==5.0.1
 pg8000==1.31.5
-scramp==1.5.0
+scramp==1.4.18
+asn1crypto==1.5.1
+python-dateutil==2.9.0.post0
