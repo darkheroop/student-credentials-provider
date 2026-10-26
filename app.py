@@ -85,6 +85,8 @@ def set_security_headers(response):
         "img-src 'self' data:; "
         "connect-src 'self'"
     )
+    response.headers["X-Flask-Path"] = request.path
+    response.headers["X-Flask-QS"] = request.environ.get("QUERY_STRING", "")
     return response
 
 
