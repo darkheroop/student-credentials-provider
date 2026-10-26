@@ -60,8 +60,9 @@ class Config:
     @property
     def is_live_mode(self) -> bool:
         """Return True when the app is configured for live API look-ups."""
+        mode = getattr(self, "STUDENT_LOOKUP_MODE", None) or getattr(self, "HASH_LOOKUP_MODE", "demo")
         return (
-            self.HASH_LOOKUP_MODE == "live"
+            mode == "live"
             and self.MD5DECRYPT_API_KEY is not None
             and self.MD5DECRYPT_API_KEY != "replace_with_your_api_key"
         )
