@@ -1,8 +1,8 @@
 """
 Database module for Student Credentials Provider.
 
-Provides SQLite persistence for dynamic API configurations and event history,
-supporting thread-safe connections, automatic schema initialization,
+Supports both persistent Neon PostgreSQL (production) and SQLite (development/fallback).
+Provides thread-safe connections, automatic schema initialization, data migration from SQLite,
 health status tracking, and failover eligibility queries.
 """
 
@@ -15,11 +15,14 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from config import Config
 from services.crypto import CredentialCrypto
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now_iso() -> str:
@@ -27,11 +30,147 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class Database:
-    """SQLite database manager for API configurations and event history."""
+def parse_pg_url(url: str) -> dict[str, Any]:
+    """Parse PostgreSQL / Neon connection URL into connection parameters."""
+    parsed = urlparse(url)
+    user = unquote(parsed.username or "")
+    password = unquote(parsed.password or "")
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    database = unquote(parsed.path.lstrip("/") or "")
 
-    def __init__(self, db_path: str | None = None, config: Config | None = None, force_production_check: bool = False):
+    qs = parse_qs(parsed.query)
+    sslmode = qs.get("sslmode", ["require"])[0]
+
+    ssl_context = None
+    if sslmode in ("require", "verify-ca", "verify-full", "prefer") or "neon.tech" in host:
+        ssl_context = True
+    elif sslmode == "disable":
+        ssl_context = False
+
+    return {
+        "user": user,
+        "password": password,
+        "host": host,
+        "port": port,
+        "database": database,
+        "ssl_context": ssl_context,
+    }
+
+
+class RowDict(dict):
+    """Row wrapper compatible with both dict key access, dict(row) conversion, and integer index access."""
+
+    def __init__(self, mapping: dict[str, Any], tuple_row: tuple | None = None):
+        super().__init__(mapping)
+        self._tuple = tuple_row or tuple(mapping.values())
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            return self._tuple[key]
+        return super().__getitem__(key)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        return super().get(key, default)
+
+
+class PostgresCursor:
+    """Cursor wrapper for PostgreSQL (pg8000) that normalizes rows to RowDict mappings and provides lastrowid."""
+
+    def __init__(self, raw_cursor: Any, lastrowid: int | None = None):
+        self.raw_cursor = raw_cursor
+        self.lastrowid = lastrowid
+
+    def fetchone(self) -> RowDict | None:
+        row = self.raw_cursor.fetchone()
+        if row is None:
+            return None
+        if self.raw_cursor.description:
+            cols = [d[0] for d in self.raw_cursor.description]
+            return RowDict(dict(zip(cols, row)), row)
+        return row
+
+    def fetchall(self) -> list[RowDict]:
+        rows = self.raw_cursor.fetchall()
+        if not rows or not self.raw_cursor.description:
+            return []
+        cols = [d[0] for d in self.raw_cursor.description]
+        return [RowDict(dict(zip(cols, r)), r) for r in rows]
+
+    @property
+    def rowcount(self) -> int:
+        return self.raw_cursor.rowcount
+
+
+class PostgresConnection:
+    """Wrapper around pg8000 Connection to provide a consistent DBAPI interface matching SQLite."""
+
+    def __init__(self, raw_conn: Any):
+        self.raw_conn = raw_conn
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        cursor = self.raw_conn.cursor()
+        pg_sql = sql.replace("?", "%s")
+        auto_returning = False
+        if pg_sql.strip().upper().startswith("INSERT INTO ") and "RETURNING" not in pg_sql.upper():
+            pg_sql = pg_sql.rstrip(";") + " RETURNING id"
+            auto_returning = True
+
+        cursor.execute(pg_sql, params)
+        lastrowid = None
+        if auto_returning or "RETURNING ID" in pg_sql.upper():
+            try:
+                row = cursor.fetchone()
+                if row:
+                    lastrowid = row[0]
+            except Exception:
+                pass
+
+        return PostgresCursor(cursor, lastrowid=lastrowid)
+
+    def commit(self):
+        self.raw_conn.commit()
+
+    def rollback(self):
+        try:
+            self.raw_conn.rollback()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self.raw_conn.close()
+        except Exception:
+            pass
+
+
+class Database:
+    """Database manager supporting persistent Neon PostgreSQL and local SQLite."""
+
+    def __init__(
+        self,
+        db_path: str | None = None,
+        database_url: str | None = None,
+        config: Config | None = None,
+        force_production_check: bool = False,
+    ):
         self.config = config or Config()
+        self.database_url = database_url or self.config.DATABASE_URL
+        self.is_postgres = bool(
+            self.database_url
+            and (
+                self.database_url.startswith("postgres://")
+                or self.database_url.startswith("postgresql://")
+            )
+        )
+
+        # Enforce requirement 6: If on Vercel and DATABASE_URL is missing, fail clearly
+        if os.getenv("VERCEL") and not self.is_postgres:
+            raise RuntimeError(
+                "CRITICAL CONFIGURATION ERROR: Neon PostgreSQL DATABASE_URL is missing in Vercel environment. "
+                "Persistent Neon PostgreSQL storage is required on Vercel to prevent ephemeral data loss."
+            )
+
         raw_path = db_path or self.config.DATABASE_PATH
 
         # Guard against in-memory databases in production
@@ -46,8 +185,12 @@ class Database:
         else:
             self.db_path = os.path.abspath(raw_path)
 
-        self._ensure_parent_dir()
+        if not self.is_postgres:
+            self._ensure_parent_dir()
+
         self.init_db()
+        if self.is_postgres:
+            self._migrate_sqlite_to_postgres_if_empty()
 
     def _ensure_parent_dir(self):
         """Ensure parent directory of database file exists."""
@@ -57,88 +200,305 @@ class Database:
     @contextmanager
     def get_connection(self):
         """
-        Create and yield a new SQLite connection with row factory, WAL mode and foreign keys.
+        Yield a database connection (Neon PostgreSQL or SQLite) with commit/rollback management.
         Ensures connections are properly committed and closed.
         """
-        conn = sqlite3.connect(self.db_path, timeout=15.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA foreign_keys = ON;")
-        try:
-            yield conn
-        finally:
-            conn.close()
+        if self.is_postgres:
+            import pg8000.dbapi
+            pg_params = parse_pg_url(self.database_url)
+            raw_conn = pg8000.dbapi.connect(
+                user=pg_params["user"],
+                password=pg_params["password"],
+                host=pg_params["host"],
+                port=pg_params["port"],
+                database=pg_params["database"],
+                ssl_context=pg_params["ssl_context"],
+                timeout=15.0,
+            )
+            wrapped_conn = PostgresConnection(raw_conn)
+            try:
+                yield wrapped_conn
+            except Exception:
+                wrapped_conn.rollback()
+                raise
+            finally:
+                wrapped_conn.close()
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA foreign_keys = ON;")
+            try:
+                yield conn
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
 
     def init_db(self):
         """Create database tables and indexes if they do not exist."""
-        with self.get_connection() as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS api_configurations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    provider_name TEXT NOT NULL,
-                    display_name TEXT NOT NULL,
-                    endpoint TEXT NOT NULL,
-                    encrypted_credential TEXT NOT NULL,
-                    auth_config TEXT DEFAULT '{}',
-                    provider_config TEXT DEFAULT '{}',
-                    priority INTEGER NOT NULL DEFAULT 10,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    health_status TEXT NOT NULL DEFAULT 'active',
-                    paused_until TEXT DEFAULT NULL,
-                    last_success_at TEXT DEFAULT NULL,
-                    last_failure_at TEXT DEFAULT NULL,
-                    last_error_category TEXT DEFAULT NULL,
-                    notes TEXT DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
+        if self.is_postgres:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS api_configurations (
+                        id SERIAL PRIMARY KEY,
+                        provider_name TEXT NOT NULL,
+                        display_name TEXT NOT NULL,
+                        endpoint TEXT NOT NULL,
+                        encrypted_credential TEXT NOT NULL,
+                        auth_config TEXT DEFAULT '{}',
+                        provider_config TEXT DEFAULT '{}',
+                        priority INTEGER NOT NULL DEFAULT 10,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        health_status TEXT NOT NULL DEFAULT 'active',
+                        paused_until TEXT DEFAULT NULL,
+                        last_success_at TEXT DEFAULT NULL,
+                        last_failure_at TEXT DEFAULT NULL,
+                        last_error_category TEXT DEFAULT NULL,
+                        notes TEXT DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS api_event_history (
+                        id SERIAL PRIMARY KEY,
+                        api_config_id INTEGER NOT NULL REFERENCES api_configurations(id) ON DELETE CASCADE,
+                        event_category TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        sanitized_message TEXT NOT NULL,
+                        http_status INTEGER DEFAULT NULL,
+                        duration DOUBLE PRECISION DEFAULT 0.0
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS admin_users (
+                        id SERIAL PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'subadmin',
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS client_api_keys (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        api_key TEXT UNIQUE NOT NULL,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
+                        requests_count INTEGER NOT NULL DEFAULT 0,
+                        last_used_at TEXT DEFAULT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_api_config_eligibility ON api_configurations(enabled, health_status, priority)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_api_event_history_config ON api_event_history(api_config_id, timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username)")
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_username_lower ON admin_users(LOWER(username))")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_client_api_keys_key ON client_api_keys(api_key)")
+                conn.commit()
+        else:
+            with self.get_connection() as conn:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS api_configurations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        provider_name TEXT NOT NULL,
+                        display_name TEXT NOT NULL,
+                        endpoint TEXT NOT NULL,
+                        encrypted_credential TEXT NOT NULL,
+                        auth_config TEXT DEFAULT '{}',
+                        provider_config TEXT DEFAULT '{}',
+                        priority INTEGER NOT NULL DEFAULT 10,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        health_status TEXT NOT NULL DEFAULT 'active',
+                        paused_until TEXT DEFAULT NULL,
+                        last_success_at TEXT DEFAULT NULL,
+                        last_failure_at TEXT DEFAULT NULL,
+                        last_error_category TEXT DEFAULT NULL,
+                        notes TEXT DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
 
-                CREATE TABLE IF NOT EXISTS api_event_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    api_config_id INTEGER NOT NULL,
-                    event_category TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    sanitized_message TEXT NOT NULL,
-                    http_status INTEGER DEFAULT NULL,
-                    duration REAL DEFAULT 0.0,
-                    FOREIGN KEY (api_config_id) REFERENCES api_configurations(id) ON DELETE CASCADE
-                );
+                    CREATE TABLE IF NOT EXISTS api_event_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        api_config_id INTEGER NOT NULL,
+                        event_category TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        sanitized_message TEXT NOT NULL,
+                        http_status INTEGER DEFAULT NULL,
+                        duration REAL DEFAULT 0.0,
+                        FOREIGN KEY (api_config_id) REFERENCES api_configurations(id) ON DELETE CASCADE
+                    );
 
-                CREATE TABLE IF NOT EXISTS admin_users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
-                    password_hash TEXT NOT NULL,
-                    role TEXT NOT NULL DEFAULT 'subadmin',
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
+                    CREATE TABLE IF NOT EXISTS admin_users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                        password_hash TEXT NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'subadmin',
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
 
-                CREATE TABLE IF NOT EXISTS client_api_keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    api_key TEXT UNIQUE NOT NULL,
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
-                    requests_count INTEGER NOT NULL DEFAULT 0,
-                    last_used_at TEXT DEFAULT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
+                    CREATE TABLE IF NOT EXISTS client_api_keys (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        api_key TEXT UNIQUE NOT NULL,
+                        is_active INTEGER NOT NULL DEFAULT 1,
+                        rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
+                        requests_count INTEGER NOT NULL DEFAULT 0,
+                        last_used_at TEXT DEFAULT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
 
-                CREATE INDEX IF NOT EXISTS idx_api_config_eligibility
-                ON api_configurations(enabled, health_status, priority);
+                    CREATE INDEX IF NOT EXISTS idx_api_config_eligibility
+                    ON api_configurations(enabled, health_status, priority);
 
-                CREATE INDEX IF NOT EXISTS idx_api_event_history_config
-                ON api_event_history(api_config_id, timestamp);
+                    CREATE INDEX IF NOT EXISTS idx_api_event_history_config
+                    ON api_event_history(api_config_id, timestamp);
 
-                CREATE INDEX IF NOT EXISTS idx_admin_users_username
-                ON admin_users(username);
+                    CREATE INDEX IF NOT EXISTS idx_admin_users_username
+                    ON admin_users(username);
 
-                CREATE INDEX IF NOT EXISTS idx_client_api_keys_key
-                ON client_api_keys(api_key);
-            """)
-            conn.commit()
+                    CREATE INDEX IF NOT EXISTS idx_client_api_keys_key
+                    ON client_api_keys(api_key);
+                """)
+                conn.commit()
+
+    def _migrate_sqlite_to_postgres_if_empty(self):
+        """
+        If connected to a fresh Neon PostgreSQL database and existing SQLite records exist,
+        safely and repeatably migrate all data into PostgreSQL without data loss.
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("SELECT COUNT(*) AS cnt FROM admin_users")
+                row = cursor.fetchone()
+                user_count = row["cnt"] if (row and "cnt" in row) else (row[0] if row else 0)
+                if user_count > 0:
+                    # PostgreSQL already has data; do not touch
+                    return
+        except Exception as e:
+            logger.warning("Could not check PostgreSQL admin_users count: %s", e)
+            return
+
+        # Check if local SQLite database exists with data
+        sqlite_file = self.db_path if (self.db_path and self.db_path != ":memory:") else os.path.join(self.config.BASE_DIR, "scp.db")
+        if not os.path.isfile(sqlite_file):
+            logger.info("Fresh Neon PostgreSQL database initialized. No local SQLite database found to migrate.")
+            return
+
+        try:
+            # Create a safety backup copy of the SQLite file before reading
+            backup_sqlite_path = f"{sqlite_file}.pre_postgres_backup_{int(datetime.now().timestamp())}"
+            try:
+                import shutil
+                shutil.copy2(sqlite_file, backup_sqlite_path)
+                logger.info("Created pre-migration SQLite backup at %s", backup_sqlite_path)
+            except Exception:
+                pass
+
+            src_conn = sqlite3.connect(sqlite_file)
+            src_conn.row_factory = sqlite3.Row
+
+            migrated_users = 0
+            migrated_configs = 0
+            migrated_keys = 0
+            migrated_events = 0
+
+            with self.get_connection() as dst_conn:
+                # 1. Migrate admin_users
+                src_cursor = src_conn.execute("SELECT * FROM admin_users ORDER BY id ASC")
+                for u in src_cursor.fetchall():
+                    dst_conn.execute(
+                        """
+                        INSERT INTO admin_users (id, username, password_hash, role, is_active, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (u["id"], u["username"], u["password_hash"], u["role"], u["is_active"], u["created_at"], u["updated_at"])
+                    )
+                    migrated_users += 1
+
+                # 2. Migrate api_configurations
+                src_cursor = src_conn.execute("SELECT * FROM api_configurations ORDER BY id ASC")
+                for c in src_cursor.fetchall():
+                    dst_conn.execute(
+                        """
+                        INSERT INTO api_configurations (
+                            id, provider_name, display_name, endpoint, encrypted_credential,
+                            auth_config, provider_config, priority, enabled,
+                            health_status, paused_until, last_success_at, last_failure_at,
+                            last_error_category, notes, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (
+                            c["id"], c["provider_name"], c["display_name"], c["endpoint"], c["encrypted_credential"],
+                            c["auth_config"], c["provider_config"], c["priority"], c["enabled"],
+                            c["health_status"], c["paused_until"], c["last_success_at"], c["last_failure_at"],
+                            c["last_error_category"], c["notes"], c["created_at"], c["updated_at"]
+                        )
+                    )
+                    migrated_configs += 1
+
+                # 3. Migrate client_api_keys
+                src_cursor = src_conn.execute("SELECT * FROM client_api_keys ORDER BY id ASC")
+                for k in src_cursor.fetchall():
+                    dst_conn.execute(
+                        """
+                        INSERT INTO client_api_keys (
+                            id, name, api_key, is_active, rate_limit_per_minute,
+                            requests_count, last_used_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (
+                            k["id"], k["name"], k["api_key"], k["is_active"], k["rate_limit_per_minute"],
+                            k["requests_count"], k["last_used_at"], k["created_at"], k["updated_at"]
+                        )
+                    )
+                    migrated_keys += 1
+
+                # 4. Migrate api_event_history
+                src_cursor = src_conn.execute("SELECT * FROM api_event_history ORDER BY id ASC")
+                for e in src_cursor.fetchall():
+                    dst_conn.execute(
+                        """
+                        INSERT INTO api_event_history (
+                            id, api_config_id, event_category, timestamp,
+                            sanitized_message, http_status, duration
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (e["id"], e["api_config_id"], e["event_category"], e["timestamp"], e["sanitized_message"], e["http_status"], e["duration"])
+                    )
+                    migrated_events += 1
+
+                # Advance PostgreSQL sequences so subsequent inserts generate non-colliding IDs
+                for seq_table in ("admin_users", "api_configurations", "client_api_keys", "api_event_history"):
+                    try:
+                        dst_conn.execute(
+                            f"SELECT setval('{seq_table}_id_seq', COALESCE((SELECT MAX(id) FROM {seq_table}), 1))"
+                        )
+                    except Exception:
+                        pass
+
+                dst_conn.commit()
+                logger.info(
+                    "SQLite to PostgreSQL migration completed: %d users, %d configs, %d keys, %d events migrated.",
+                    migrated_users, migrated_configs, migrated_keys, migrated_events
+                )
+            src_conn.close()
+        except Exception as err:
+            logger.error("Error during SQLite to PostgreSQL migration: %s", err)
 
     # ── Configuration Queries ───────────────────────────────────────────
 
@@ -399,18 +759,32 @@ class Database:
                 (config_id, event_category, now_iso, sanitized_message, http_status, float(duration)),
             )
             # Bound history size: keep at most 200 events per config
-            conn.execute(
-                """
-                DELETE FROM api_event_history
-                WHERE id IN (
-                    SELECT id FROM api_event_history
-                    WHERE api_config_id = ?
-                    ORDER BY timestamp DESC
-                    LIMIT -1 OFFSET 200
+            if self.is_postgres:
+                conn.execute(
+                    """
+                    DELETE FROM api_event_history
+                    WHERE id IN (
+                        SELECT id FROM api_event_history
+                        WHERE api_config_id = ?
+                        ORDER BY timestamp DESC
+                        OFFSET 200
+                    )
+                    """,
+                    (config_id,),
                 )
-                """,
-                (config_id,),
-            )
+            else:
+                conn.execute(
+                    """
+                    DELETE FROM api_event_history
+                    WHERE id IN (
+                        SELECT id FROM api_event_history
+                        WHERE api_config_id = ?
+                        ORDER BY timestamp DESC
+                        LIMIT -1 OFFSET 200
+                    )
+                    """,
+                    (config_id,),
+                )
             conn.commit()
             return cursor.lastrowid
 
@@ -478,7 +852,7 @@ class Database:
 
             # Check if username exists already
             cursor = conn.execute(
-                "SELECT * FROM admin_users WHERE username = ?", (username.strip(),)
+                "SELECT * FROM admin_users WHERE LOWER(username) = LOWER(?)", (username.strip(),)
             )
             user_exists = cursor.fetchone()
 
@@ -508,7 +882,7 @@ class Database:
             return None
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM admin_users WHERE username = ?", (username.strip(),)
+                "SELECT * FROM admin_users WHERE LOWER(username) = LOWER(?)", (username.strip(),)
             )
             row = cursor.fetchone()
             return dict(row) if row else None
@@ -544,12 +918,12 @@ class Database:
         with self.get_connection() as conn:
             if exclude_user_id is not None:
                 cursor = conn.execute(
-                    "SELECT 1 FROM admin_users WHERE username = ? AND id != ?",
+                    "SELECT 1 FROM admin_users WHERE LOWER(username) = LOWER(?) AND id != ?",
                     (username.strip(), exclude_user_id),
                 )
             else:
                 cursor = conn.execute(
-                    "SELECT 1 FROM admin_users WHERE username = ?",
+                    "SELECT 1 FROM admin_users WHERE LOWER(username) = LOWER(?)",
                     (username.strip(),),
                 )
             return cursor.fetchone() is not None

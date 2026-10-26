@@ -746,13 +746,15 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
     @admin_bp.route("/api/persistence-info", methods=["GET"])
     @main_admin_required
     def get_persistence_info():
-        """Return information about Vercel serverless persistence and subadmins env config."""
+        """Return information about Vercel serverless persistence and database config."""
         subadmins = db.get_all_subadmins()
         sample_env = ",".join([f"{s['username']}:password" for s in subadmins])
         return jsonify({
             "success": True,
             "is_vercel": bool(os.getenv("VERCEL")),
-            "database_path": config.DATABASE_PATH,
+            "is_postgres": db.is_postgres,
+            "engine": "Neon PostgreSQL" if db.is_postgres else "SQLite",
+            "database_path": "Neon PostgreSQL (Persistent Cloud Storage)" if db.is_postgres else config.DATABASE_PATH,
             "subadmin_env_configured": bool(config.SUBADMIN_USERS),
             "suggested_env_string": sample_env,
             "subadmins_count": len(subadmins),

@@ -52,6 +52,22 @@ class Config:
 
     # ── Database & Persistence ──────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
+
+    # Primary managed database URL (Neon PostgreSQL on Vercel)
+    DATABASE_URL: str | None = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("DATABASE_POSTGRES_URL")
+        or os.getenv("POSTGRES_URL")
+    )
+    DATABASE_URL_UNPOOLED: str | None = os.getenv("DATABASE_URL_UNPOOLED")
+
+    # Discrete Neon / Postgres connection settings
+    DATABASE_POSTGRES_HOST: str | None = os.getenv("DATABASE_POSTGRES_HOST")
+    DATABASE_POSTGRES_USER: str | None = os.getenv("DATABASE_POSTGRES_USER")
+    DATABASE_POSTGRES_PASSWORD: str | None = os.getenv("DATABASE_POSTGRES_PASSWORD")
+    DATABASE_POSTGRES_DATABASE: str | None = os.getenv("DATABASE_POSTGRES_DATABASE")
+
+    # Local / fallback SQLite database path
     _RAW_DB_PATH: str = os.getenv("DATABASE_PATH", "").strip()
     if not _RAW_DB_PATH:
         DATABASE_PATH: str = (
@@ -96,3 +112,9 @@ class Config:
     def is_demo_mode(self) -> bool:
         """Return True when the app is running in demo / offline mode."""
         return not self.is_live_mode
+
+    @property
+    def is_postgres(self) -> bool:
+        """Return True when a PostgreSQL connection URL is configured."""
+        url = self.DATABASE_URL
+        return bool(url and (url.startswith("postgres://") or url.startswith("postgresql://")))

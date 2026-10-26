@@ -434,6 +434,20 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       const data = await res.json();
       renderSubadminsList(data.subadmins || []);
+
+      // Check database engine status
+      try {
+        const pRes = await apiFetch('/admin/api/persistence-info');
+        const pData = await pRes.json();
+        const noticeTitle = document.querySelector('#persistenceNotice .notice-title');
+        const noticeDesc = document.querySelector('#persistenceNotice .notice-desc');
+        const envBox = document.querySelector('#persistenceNotice .env-code-box');
+        if (pData.success && pData.is_postgres) {
+          if (noticeTitle) noticeTitle.innerHTML = '🟢 Connected to Neon PostgreSQL (Permanent Storage)';
+          if (noticeDesc) noticeDesc.innerHTML = 'Your application is connected to <strong>Neon PostgreSQL</strong>. Subadmin accounts, API keys, and failover state persist automatically and permanently across all Vercel serverless cold restarts and deployments.';
+          if (envBox) envBox.style.display = 'none';
+        }
+      } catch (_) {}
     } catch (err) {
       subadminsList.innerHTML = `<p class="empty-state">Error loading subadmins: ${err.message}</p>`;
       showAlert(err.message, 'error');

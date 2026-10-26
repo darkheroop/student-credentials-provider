@@ -210,3 +210,104 @@ class TestSubadminSeedingAndPersistence:
         # Verify prohibited check
         with pytest.raises(ValueError, match="strictly prohibited"):
             Database(db_path=":memory:", config=cfg, force_production_check=True)
+
+    def test_parse_pg_url(self):
+        from database import parse_pg_url
+        neon_url = "postgresql://user_test:pass_secret@ep-cool-frost-123456-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require"
+        params = parse_pg_url(neon_url)
+        assert params["user"] == "user_test"
+        assert params["password"] == "pass_secret"
+        assert params["host"] == "ep-cool-frost-123456-pooler.us-east-2.aws.neon.tech"
+        assert params["database"] == "neondb"
+        assert params["ssl_context"] is True
+
+    def test_missing_database_url_on_vercel_raises_error(self, monkeypatch):
+        import pytest
+        from database import Database
+        from config import Config
+        cfg = Config()
+        monkeypatch.setenv("VERCEL", "1")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DATABASE_POSTGRES_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        with pytest.raises(RuntimeError, match="CRITICAL CONFIGURATION ERROR: Neon PostgreSQL DATABASE_URL is missing"):
+            Database(config=cfg)
+
+    def test_postgres_connection_wrapper(self):
+        from database import PostgresConnection, PostgresCursor, RowDict
+
+        class MockCursor:
+            def __init__(self):
+                self.description = [("id",), ("username",), ("role",)]
+                self.executed_sql = None
+                self.executed_params = None
+                self.rowcount = 1
+
+            def execute(self, sql, params=()):
+                self.executed_sql = sql
+                self.executed_params = params
+
+            def fetchone(self):
+                return (42, "admin_mock", "main_admin")
+
+            def fetchall(self):
+                return [(42, "admin_mock", "main_admin")]
+
+        class MockRawConn:
+            def __init__(self):
+                self.cur = MockCursor()
+                self.committed = False
+                self.rolled_back = False
+
+            def cursor(self):
+                return self.cur
+
+            def commit(self):
+                self.committed = True
+
+            def rollback(self):
+                self.rolled_back = True
+
+            def close(self):
+                pass
+
+        raw = MockRawConn()
+        pg_conn = PostgresConnection(raw)
+
+        # Test execute translating '?' to '%s' and auto appending RETURNING id
+        cur = pg_conn.execute("INSERT INTO admin_users (username) VALUES (?)", ("test_sub",))
+        assert "%s" in raw.cur.executed_sql
+        assert "RETURNING id" in raw.cur.executed_sql
+        assert cur.lastrowid == 42
+        assert cur.rowcount == 1
+
+        # Test fetchone returns RowDict
+        row = cur.fetchone()
+        assert isinstance(row, RowDict)
+        assert row["username"] == "admin_mock"
+        assert row[0] == 42
+        assert dict(row) == {"id": 42, "username": "admin_mock", "role": "main_admin"}
+
+        # Test fetchall returns list of RowDict
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["role"] == "main_admin"
+
+        pg_conn.commit()
+        assert raw.committed is True
+
+    def test_database_transaction_rollback(self):
+        # Verify transaction rollback on exception
+        initial_configs_count = len(db.get_all_configs())
+        try:
+            with db.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO api_configurations (provider_name, display_name, endpoint, encrypted_credential, priority, enabled, created_at, updated_at) "
+                    "VALUES ('fail', 'Will Rollback', 'http://example.com', 'cred', 10, 1, 'now', 'now')"
+                )
+                raise RuntimeError("Simulated failure in transaction")
+        except RuntimeError:
+            pass
+
+        # Verify that uncommitted insert was rolled back
+        assert len(db.get_all_configs()) == initial_configs_count
