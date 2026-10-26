@@ -246,20 +246,19 @@ def test_08_rotation_across_multiple_requests(temp_db_path, crypto):
         res1 = coordinator.execute_lookup("hash1", "md5")
         assert res1["provider_id"] == id1
 
-        # Request 2 -> Provider B (Priority 2)
+        # Request 2 -> Provider A (Priority 1 is attempted first for every new request)
         res2 = coordinator.execute_lookup("hash2", "md5")
-        assert res2["provider_id"] == id2
+        assert res2["provider_id"] == id1
 
-        # Request 3 -> Provider C (Priority 3)
+        # Reorder: move Provider B to Priority 1
+        db.change_priority(id2, 1)
+
+        # Request 3 -> Provider B (now Priority 1)
         res3 = coordinator.execute_lookup("hash3", "md5")
-        assert res3["provider_id"] == id3
-
-        # Request 4 -> Wraps around to Provider A (Priority 1)
-        res4 = coordinator.execute_lookup("hash4", "md5")
-        assert res4["provider_id"] == id1
+        assert res3["provider_id"] == id2
 
 
-# ── Scenario 9: Rotation across multiple workers or instances ───────────────
+# ── Scenario 9: Rotation and Priority Across Multiple Workers or Instances ───
 
 def test_09_rotation_across_multiple_workers(temp_db_path, crypto):
     db_init = Database(db_path=temp_db_path)
@@ -279,7 +278,7 @@ def test_09_rotation_across_multiple_workers(temp_db_path, crypto):
         res1 = coord1.execute_lookup("h1", "md5")
         assert res1["provider_id"] == id1
 
-    # Worker 2 executes lookup immediately after, seeing worker 1's persisted cursor
+    # Worker 2 executes lookup: observes same persistent database and uses Priority 1
     db_worker2 = Database(db_path=temp_db_path)
     coord2 = ApiFailoverCoordinator(db=db_worker2, crypto=crypto)
     with patch("services.failover.get_provider_adapter") as mock_getter:
@@ -289,7 +288,12 @@ def test_09_rotation_across_multiple_workers(temp_db_path, crypto):
         )
         mock_getter.return_value = mock_adapter
         res2 = coord2.execute_lookup("h2", "md5")
-        assert res2["provider_id"] == id2
+        assert res2["provider_id"] == id1
+
+        # When Provider 1 enters cooldown, Worker 2 immediately observes it and fails over to Provider 2
+        db_worker2.set_health_status(id1, "quota_exhausted", paused_until="2099-01-01T00:00:00+00:00")
+        res3 = coord2.execute_lookup("h3", "md5")
+        assert res3["provider_id"] == id2
 
 
 # ── Scenario 10: Quota exhaustion without API deletion ──────────────────────

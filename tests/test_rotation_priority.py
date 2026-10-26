@@ -100,16 +100,16 @@ def rotation_env(tmp_path):
 
 
 class TestCyclicRotationAndFailover:
-    # ── 1. Successful API rotation across three APIs ─────────────────────
+    # ── 1. Highest priority API used first, updates take effect immediately ─
     def test_1_successful_rotation_across_three_apis(self, rotation_env):
         db = rotation_env["db"]
         crypto = rotation_env["crypto"]
         coord = rotation_env["coordinator"]
         provider = rotation_env["provider"]
 
-        db.insert_config("mock_rotating_provider", "API A", "https://api-a", crypto.encrypt("key_a"), priority=1)
-        db.insert_config("mock_rotating_provider", "API B", "https://api-b", crypto.encrypt("key_b"), priority=2)
-        db.insert_config("mock_rotating_provider", "API C", "https://api-c", crypto.encrypt("key_c"), priority=3)
+        id_a = db.insert_config("mock_rotating_provider", "API A", "https://api-a", crypto.encrypt("key_a"), priority=1)
+        id_b = db.insert_config("mock_rotating_provider", "API B", "https://api-b", crypto.encrypt("key_b"), priority=2)
+        id_c = db.insert_config("mock_rotating_provider", "API C", "https://api-c", crypto.encrypt("key_c"), priority=3)
 
         # Request 1 -> API A (Priority 1)
         r1 = coord.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
@@ -117,19 +117,21 @@ class TestCyclicRotationAndFailover:
         assert r1["provider_name"] == "API A"
         assert provider.calls[-1]["credential"] == "key_a"
 
-        # Request 2 -> API B (Priority 2)
+        # Request 2 -> API A (Priority 1 remains highest priority)
         r2 = coord.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
         assert r2["success"] is True
-        assert r2["provider_name"] == "API B"
-        assert provider.calls[-1]["credential"] == "key_b"
+        assert r2["provider_name"] == "API A"
 
-        # Request 3 -> API C (Priority 3)
+        # Reorder: Move API B to Priority 1
+        db.change_priority(id_b, 1)
+
+        # Request 3 -> API B (now Priority 1)
         r3 = coord.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
         assert r3["success"] is True
-        assert r3["provider_name"] == "API C"
-        assert provider.calls[-1]["credential"] == "key_c"
+        assert r3["provider_name"] == "API B"
+        assert provider.calls[-1]["credential"] == "key_b"
 
-    # ── 2. Cyclic rotation returning to first API after last ─────────────
+    # ── 2. Priority 1 consistently used across requests without cursor drift ─
     def test_2_cyclic_rotation_wrap_around(self, rotation_env):
         db = rotation_env["db"]
         crypto = rotation_env["crypto"]
@@ -139,13 +141,13 @@ class TestCyclicRotationAndFailover:
         db.insert_config("mock_rotating_provider", "API A", "https://api-a", crypto.encrypt("key_a"), priority=1)
         db.insert_config("mock_rotating_provider", "API B", "https://api-b", crypto.encrypt("key_b"), priority=2)
 
-        # A -> B -> A -> B -> A
+        # Multiple successive requests must consistently use Priority 1
         seq = []
         for _ in range(5):
             res = coord.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
             seq.append(res["provider_name"])
 
-        assert seq == ["API A", "API B", "API A", "API B", "API A"]
+        assert seq == ["API A", "API A", "API A", "API A", "API A"]
 
     # ── 3. Failover when current API reaches quota ───────────────────────
     def test_3_failover_when_current_api_reaches_quota(self, rotation_env):
@@ -178,10 +180,10 @@ class TestCyclicRotationAndFailover:
         assert cfg_a["health_status"] == "quota_exhausted"
         assert cfg_a["paused_until"] is not None
 
-        # Next request continues rotation from after API B -> uses API C!
+        # Next request: API A is still quota_exhausted, so next request uses API B (highest-priority eligible API)
         r2 = coord.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
         assert r2["success"] is True
-        assert r2["provider_name"] == "API C"
+        assert r2["provider_name"] == "API B"
 
     # ── 4. Failover when an API returns retryable server error ───────────
     def test_4_failover_when_api_returns_server_error(self, rotation_env):
@@ -338,11 +340,12 @@ class TestCyclicRotationAndFailover:
         assert all_cfgs[0]["display_name"] == "API 1"
         assert all_cfgs[1]["display_name"] == "API 2"
 
-    # ── 10. Persistence of rotation state across separate requests ───────
+    # ── 10. Persistence of priority & health state across separate instances ─
     def test_10_persistence_of_rotation_state_across_requests(self, rotation_env):
         db = rotation_env["db"]
         crypto = rotation_env["crypto"]
         config = rotation_env["config"]
+        provider = rotation_env["provider"]
 
         db.insert_config("mock_rotating_provider", "API 1", "https://api1", crypto.encrypt("k1"), priority=1)
         db.insert_config("mock_rotating_provider", "API 2", "https://api2", crypto.encrypt("k2"), priority=2)
@@ -353,9 +356,15 @@ class TestCyclicRotationAndFailover:
         assert r1["provider_name"] == "API 1"
 
         # Create coordinator 2 (simulating fresh serverless container/worker)
+        # Observes the same persistent priority and health state -> starts with Priority 1
         c2 = ApiFailoverCoordinator(db=db, crypto=crypto, config=config)
         r2 = c2.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
-        assert r2["provider_name"] == "API 2"
+        assert r2["provider_name"] == "API 1"
+
+        # If API 1 is paused, both observe it immediately
+        db.set_health_status(1, "quota_exhausted", paused_until="2099-01-01T00:00:00+00:00")
+        r3 = c2.execute_lookup("5d41402abc4b2a76b9719d911017c592", "md5")
+        assert r3["provider_name"] == "API 2"
 
     # ── 11. Concurrent requests across multiple workers ──────────────────
     def test_11_concurrent_requests_across_multiple_workers(self, rotation_env):
@@ -374,8 +383,7 @@ class TestCyclicRotationAndFailover:
             results = list(executor.map(worker, range(15)))
 
         assert all(r["success"] is True for r in results)
-        providers_used = set(r["provider_name"] for r in results)
-        assert len(providers_used) == 3
+        assert all(r["provider_name"] == "API 1" for r in results)
 
     # ── 12. Automatic priority assignment when APIs are added ────────────
     def test_12_automatic_priority_assignment(self, rotation_env):

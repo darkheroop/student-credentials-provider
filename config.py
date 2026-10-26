@@ -94,6 +94,9 @@ class Config:
     GITHUB_REPO: str | None = os.getenv("GITHUB_REPO", "darkheroop/student-credentials-provider")
     MAX_FAILOVER_ATTEMPTS: int = int(os.getenv("MAX_FAILOVER_ATTEMPTS", "5"))
     DEFAULT_PAUSE_DURATION_MINUTES: int = int(os.getenv("DEFAULT_PAUSE_DURATION_MINUTES", "60"))
+    SERVER_ERROR_COOLDOWN_SECONDS: int = int(os.getenv("SERVER_ERROR_COOLDOWN_SECONDS", "60"))
+    NETWORK_ERROR_COOLDOWN_SECONDS: int = int(os.getenv("NETWORK_ERROR_COOLDOWN_SECONDS", "60"))
+    RATE_LIMIT_COOLDOWN_SECONDS: int = int(os.getenv("RATE_LIMIT_COOLDOWN_SECONDS", "60"))
 
     # ── Supported hash algorithms ───────────────────────────────────────
     # Maps algorithm name → expected hex-digest length (in characters).

@@ -638,8 +638,10 @@ class Database:
                     paused_until = NULL,
                     updated_at = ?
                 WHERE enabled = 1
-                  AND paused_until IS NOT NULL
-                  AND paused_until <= ?
+                  AND (
+                      (paused_until IS NOT NULL AND paused_until <= ?)
+                      OR (paused_until IS NULL AND health_status NOT IN ('active', 'config_error', 'auth_failed'))
+                  )
                   AND health_status NOT IN ('config_error', 'auth_failed')
                 """,
                 (now_iso, now_iso),
@@ -1046,6 +1048,8 @@ class Database:
     ) -> bool:
         """Update the health/availability status of an API configuration."""
         now_iso = _utc_now_iso()
+        if paused_until and paused_until.endswith("Z"):
+            paused_until = paused_until[:-1] + "+00:00"
         with self.get_connection() as conn:
             if increment_failure:
                 cursor = conn.execute(

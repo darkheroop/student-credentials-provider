@@ -413,13 +413,17 @@ def test_17_preserve_cyclic_rotation_and_failover_after_reorder(temp_db):
         # Now reorder: move C to priority 1. New sequence: C (P1), A (P2), B (P3)
         db.change_priority(id3, 1)
 
-        # Next cyclic request should advance from last used (A) to the next in sequence: B (P3)
+        # Next request must immediately use the new Priority 1 (Provider C)
         res2 = coord.execute_lookup("h2", "md5")
-        assert res2["provider_id"] == id2
+        assert res2["provider_id"] == id3
 
-        # Next request cycles to C (P1)
+        # If Provider C fails, failover follows priority order to Provider A (P2)
+        mock_adapter.lookup.side_effect = [
+            ProviderLookupResult(success=False, status="quota_exhausted", found=False),
+            ProviderLookupResult(success=True, status="match_found", found=True, plaintext="failover_hit", duration=0.01),
+        ]
         res3 = coord.execute_lookup("h3", "md5")
-        assert res3["provider_id"] == id3
+        assert res3["provider_id"] == id1
 
 
 # ── 18. Enforcing administrator and sub-admin permissions ────────────────────

@@ -247,7 +247,12 @@ def api_v1_external_lookup():
     if "lookup_result" not in result:
         result["lookup_result"] = result.get("plaintext")
 
-    status_code = 200 if result.get("success") else 400
+    if result.get("success"):
+        status_code = 200
+    elif result.get("status") in ("all_providers_failed", "no_provider_available", "service_unavailable"):
+        status_code = 503
+    else:
+        status_code = 400
     return jsonify(result), status_code
 
 
@@ -333,7 +338,12 @@ def api_student_lookup():
 
     result = student_lookup_service.student_lookup(str(lookup_input), str(algorithm_type))
 
-    status_code = 200 if result.get("success") else 400
+    if result.get("success"):
+        status_code = 200
+    elif result.get("status") in ("all_providers_failed", "no_provider_available", "service_unavailable"):
+        status_code = 503
+    else:
+        status_code = 400
     return jsonify(result), status_code
 
 
