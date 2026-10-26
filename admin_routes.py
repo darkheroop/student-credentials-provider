@@ -330,6 +330,12 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         if not existing:
             return jsonify({"success": False, "error": "Configuration not found."}), 404
 
+        user_id = session.get("user_id")
+        user_role = session.get("role")
+        if user_role != "main_admin":
+            if existing.get("owner_id") is not None and existing["owner_id"] != user_id:
+                return jsonify({"success": False, "error": "Access denied. You can only manage APIs created by your account."}), 403
+
         data = request.get_json(silent=True) or {}
         display_name = data.get("display_name")
         endpoint = data.get("endpoint")
@@ -348,11 +354,12 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
             encrypted_cred = crypto.encrypt(str(credential).strip())
 
         priority_int = None
-        if priority is not None:
+        if priority is not None and str(priority).strip() != "":
             try:
-                priority_int = int(priority)
-            except (ValueError, TypeError):
-                priority_int = existing["priority"]
+                from services.priority import validate_priority_input
+                priority_int = validate_priority_input(priority)
+            except ValueError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
 
         enabled_int = None
         if enabled is not None:
@@ -382,6 +389,16 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         """Delete an API configuration and its event history."""
         if not verify_csrf():
             return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        existing = db.get_config_by_id(config_id)
+        if not existing:
+            return jsonify({"success": False, "error": "Configuration not found."}), 404
+
+        user_id = session.get("user_id")
+        user_role = session.get("role")
+        if user_role != "main_admin":
+            if existing.get("owner_id") is not None and existing["owner_id"] != user_id:
+                return jsonify({"success": False, "error": "Access denied. You can only delete APIs created by your account."}), 403
 
         deleted = db.delete_config(config_id)
         if deleted:
@@ -490,12 +507,59 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
             })
         return jsonify({"success": False, "error": "Failed to reorder configurations."}), 500
 
+    @admin_bp.route("/api/configs/<int:config_id>/priority", methods=["POST"])
+    @admin_required
+    def set_config_priority(config_id: int):
+        """Move an API to a requested priority position and shift other APIs consecutively."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        existing = db.get_config_by_id(config_id)
+        if not existing:
+            return jsonify({"success": False, "error": "Configuration not found."}), 404
+
+        user_id = session.get("user_id")
+        user_role = session.get("role")
+        if user_role != "main_admin":
+            if existing.get("owner_id") is not None and existing["owner_id"] != user_id:
+                return jsonify({"success": False, "error": "Access denied. You can only change priority of APIs created by your account."}), 403
+
+        data = request.get_json(silent=True) or {}
+        priority_val = data.get("priority")
+
+        try:
+            from services.priority import validate_priority_input
+            target_priority = validate_priority_input(priority_val)
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+        try:
+            updated_configs = db.change_priority(config_id, target_priority)
+            db.record_event(config_id, "priority_changed", f"Priority moved to #{target_priority}.")
+            return jsonify({
+                "success": True,
+                "message": f"API priority updated to #{target_priority}. All priorities shifted consecutively.",
+                "configs": updated_configs,
+            })
+        except Exception as exc:
+            return jsonify({"success": False, "error": f"Failed to change priority: {exc}"}), 500
+
     @admin_bp.route("/api/configs/<int:config_id>/move", methods=["POST"])
     @admin_required
     def move_config(config_id: int):
         """Move a configuration 'up' (higher priority) or 'down' (lower priority)."""
         if not verify_csrf():
             return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        existing = db.get_config_by_id(config_id)
+        if not existing:
+            return jsonify({"success": False, "error": "Configuration not found."}), 404
+
+        user_id = session.get("user_id")
+        user_role = session.get("role")
+        if user_role != "main_admin":
+            if existing.get("owner_id") is not None and existing["owner_id"] != user_id:
+                return jsonify({"success": False, "error": "Access denied. You can only move APIs created by your account."}), 403
 
         data = request.get_json(silent=True) or {}
         direction = str(data.get("direction") or "").strip().lower()

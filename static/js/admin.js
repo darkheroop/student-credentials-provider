@@ -199,26 +199,50 @@ document.addEventListener('DOMContentLoaded', () => {
       title.appendChild(badge);
       header.appendChild(title);
 
-      // Reorder buttons (Move Up / Down)
+      // Reorder buttons (Move Up / Down & Direct Priority Selector)
       const reorderGroup = document.createElement('div');
       reorderGroup.style.display = 'flex';
-      reorderGroup.style.gap = '4px';
+      reorderGroup.style.gap = '6px';
       reorderGroup.style.alignItems = 'center';
+
+      // Priority selector dropdown
+      const priSelect = document.createElement('select');
+      priSelect.className = 'priority-select';
+      priSelect.title = `Change priority of ${cfg.display_name} (Current: #${cfg.priority})`;
+      for (let p = 1; p <= configs.length; p++) {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = `#${p}`;
+        if (p === cfg.priority) {
+          opt.selected = true;
+        }
+        priSelect.appendChild(opt);
+      }
 
       const upBtn = document.createElement('button');
       upBtn.className = 'btn-icon-sm';
       upBtn.title = 'Move Up (Higher Priority)';
       upBtn.innerHTML = '&#9650;';
       upBtn.disabled = (cfg.priority === 1 || configs.indexOf(cfg) === 0);
-      upBtn.onclick = () => moveConfig(cfg.id, 'up');
-      reorderGroup.appendChild(upBtn);
 
       const downBtn = document.createElement('button');
       downBtn.className = 'btn-icon-sm';
       downBtn.title = 'Move Down (Lower Priority)';
       downBtn.innerHTML = '&#9660;';
       downBtn.disabled = (configs.indexOf(cfg) === configs.length - 1);
-      downBtn.onclick = () => moveConfig(cfg.id, 'down');
+
+      upBtn.onclick = () => moveConfig(cfg.id, 'up', [upBtn, downBtn, priSelect], priPill);
+      downBtn.onclick = () => moveConfig(cfg.id, 'down', [upBtn, downBtn, priSelect], priPill);
+
+      priSelect.onchange = () => {
+        const targetPri = parseInt(priSelect.value, 10);
+        if (targetPri !== cfg.priority) {
+          changeConfigPriority(cfg.id, targetPri, priSelect, [upBtn, downBtn], priPill);
+        }
+      };
+
+      reorderGroup.appendChild(priSelect);
+      reorderGroup.appendChild(upBtn);
       reorderGroup.appendChild(downBtn);
 
       header.appendChild(reorderGroup);
@@ -356,7 +380,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function moveConfig(configId, direction) {
+  async function changeConfigPriority(configId, newPriority, selectElem, siblingBtns, pillElem) {
+    if (selectElem) selectElem.disabled = true;
+    if (siblingBtns) siblingBtns.forEach((b) => { if (b) b.disabled = true; });
+    if (pillElem) pillElem.textContent = 'Updating...';
+
+    try {
+      const res = await apiFetch(`/admin/api/configs/${configId}/priority`, {
+        method: 'POST',
+        body: JSON.stringify({ priority: newPriority }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showAlert(data.message || 'Priority updated successfully.', 'success');
+        loadConfigs();
+      } else {
+        showAlert(data.error || 'Failed to update priority.', 'error');
+        loadConfigs();
+      }
+    } catch (err) {
+      showAlert(`Priority update error: ${err.message}`, 'error');
+      loadConfigs();
+    }
+  }
+
+  async function moveConfig(configId, direction, siblingBtns, pillElem) {
+    if (siblingBtns) siblingBtns.forEach((b) => { if (b) b.disabled = true; });
+    if (pillElem) pillElem.textContent = 'Updating...';
+
     try {
       const res = await apiFetch(`/admin/api/configs/${configId}/move`, {
         method: 'POST',
@@ -367,9 +418,11 @@ document.addEventListener('DOMContentLoaded', () => {
         loadConfigs();
       } else {
         showAlert(data.error || 'Failed to move configuration.', 'error');
+        loadConfigs();
       }
     } catch (err) {
       showAlert(`Error: ${err.message}`, 'error');
+      loadConfigs();
     }
   }
 

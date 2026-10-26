@@ -667,6 +667,65 @@ class Database:
                 return row["next_pri"] if "next_pri" in row else row[0]
             return 1
 
+    def sync_rotation_state_priority(self) -> None:
+        """Synchronize api_rotation_state last_priority with last_config_id current priority."""
+        try:
+            rot = self.get_rotation_state()
+            last_id = rot.get("last_config_id")
+            if last_id:
+                cfg = self.get_config_by_id(last_id)
+                if cfg and cfg.get("priority") != rot.get("last_priority"):
+                    now_iso = _utc_now_iso()
+                    with self.get_connection() as conn:
+                        conn.execute(
+                            "UPDATE api_rotation_state SET last_priority = ?, updated_at = ? WHERE id = 1",
+                            (cfg["priority"], now_iso),
+                        )
+                        conn.commit()
+        except Exception as e:
+            logger.debug("Failed to sync rotation priority: %s", e)
+
+    def change_priority(self, config_id: int, new_priority: int) -> list[dict[str, Any]]:
+        """
+        Move an API configuration to a requested priority position and automatically
+        shift other configurations to maintain a consecutive sequence starting at 1.
+        Atomically persisted in PostgreSQL/SQLite transaction with row locking.
+        """
+        from services.priority import validate_priority_input, calculate_reordered_sequence
+        validated_pri = validate_priority_input(new_priority)
+        now_iso = _utc_now_iso()
+
+        with self.get_connection() as conn:
+            query = (
+                "SELECT id, priority FROM api_configurations ORDER BY priority ASC, id ASC FOR UPDATE"
+                if self.is_postgres
+                else "SELECT id, priority FROM api_configurations ORDER BY priority ASC, id ASC"
+            )
+            cursor = conn.execute(query)
+            current_configs = [dict(r) for r in cursor.fetchall()]
+
+            if not current_configs:
+                return []
+
+            new_ordered_ids = calculate_reordered_sequence(current_configs, config_id, validated_pri)
+
+            # Phase 1: temporary negative priorities to prevent transient constraint violations
+            for idx, cid in enumerate(new_ordered_ids, start=1):
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (-idx, now_iso, cid),
+                )
+            # Phase 2: positive consecutive priorities 1..N
+            for idx, cid in enumerate(new_ordered_ids, start=1):
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (idx, now_iso, cid),
+                )
+            conn.commit()
+
+        self.sync_rotation_state_priority()
+        return self.get_all_configs()
+
     def normalize_priorities(self) -> list[dict[str, Any]]:
         """
         Normalize priorities of all api_configurations to sequential 1, 2, 3...
@@ -674,8 +733,21 @@ class Database:
         """
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
-            cursor = conn.execute("SELECT id FROM api_configurations ORDER BY priority ASC, id ASC")
+            query = (
+                "SELECT id FROM api_configurations ORDER BY priority ASC, id ASC FOR UPDATE"
+                if self.is_postgres
+                else "SELECT id FROM api_configurations ORDER BY priority ASC, id ASC"
+            )
+            cursor = conn.execute(query)
             rows = cursor.fetchall()
+            # Phase 1: temporary negative priorities
+            for idx, r in enumerate(rows, start=1):
+                cfg_id = r["id"] if (isinstance(r, dict) or hasattr(r, "__getitem__")) else r[0]
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (-idx, now_iso, cfg_id),
+                )
+            # Phase 2: positive consecutive priorities
             for idx, r in enumerate(rows, start=1):
                 cfg_id = r["id"] if (isinstance(r, dict) or hasattr(r, "__getitem__")) else r[0]
                 conn.execute(
@@ -683,6 +755,7 @@ class Database:
                     (idx, now_iso, cfg_id),
                 )
             conn.commit()
+        self.sync_rotation_state_priority()
         return self.get_all_configs()
 
     def reorder_priorities(self, config_ids: list[int]) -> bool:
@@ -694,19 +767,27 @@ class Database:
             return False
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
+            # Phase 1: temporary negative priorities
+            for priority_num, cfg_id in enumerate(config_ids, start=1):
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (-priority_num, now_iso, int(cfg_id)),
+                )
+            # Phase 2: final positive consecutive priorities
             for priority_num, cfg_id in enumerate(config_ids, start=1):
                 conn.execute(
                     "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
                     (priority_num, now_iso, int(cfg_id)),
                 )
             conn.commit()
+        self.sync_rotation_state_priority()
         return True
 
     def move_priority(self, config_id: int, direction: str) -> bool:
         """
         Move a configuration 'up' (higher priority, smaller number)
-        or 'down' (lower priority, larger number) by swapping with adjacent neighbor,
-        then normalizes all priorities.
+        or 'down' (lower priority, larger number) by shifting its position
+        using the priority reordering service.
         """
         configs = self.get_all_configs()
         if not configs:
@@ -716,14 +797,20 @@ class Database:
         if idx is None:
             return False
 
-        if direction == "up" and idx > 0:
-            configs[idx - 1], configs[idx] = configs[idx], configs[idx - 1]
-        elif direction == "down" and idx < len(configs) - 1:
-            configs[idx], configs[idx + 1] = configs[idx + 1], configs[idx]
+        cur_priority = configs[idx]["priority"]
+        if direction == "up":
+            if cur_priority <= 1:
+                return False  # Already at top
+            target_pri = cur_priority - 1
+        elif direction == "down":
+            if cur_priority >= len(configs):
+                return False  # Already at bottom
+            target_pri = cur_priority + 1
         else:
-            return False  # Already at boundary
+            return False
 
-        return self.reorder_priorities([c["id"] for c in configs])
+        self.change_priority(config_id, target_pri)
+        return True
 
     def get_rotation_state(self) -> dict[str, Any]:
         """Fetch the persistent rotation state from PostgreSQL/SQLite."""
@@ -842,7 +929,15 @@ class Database:
                     ),
                 )
             conn.commit()
-            return cursor.lastrowid
+            new_id = cursor.lastrowid
+
+        if priority is not None and int(priority) > 0:
+            try:
+                self.change_priority(new_id, int(priority))
+            except Exception as e:
+                logger.warning("Priority shift after insert failed: %s", e)
+
+        return new_id
 
     def update_config(
         self,
@@ -862,6 +957,7 @@ class Database:
         if not existing:
             return False
 
+        old_priority = existing["priority"]
         now_iso = _utc_now_iso()
         new_name = display_name.strip() if display_name is not None else existing["display_name"]
         new_endpoint = endpoint.strip() if endpoint is not None else existing["endpoint"]
@@ -904,12 +1000,21 @@ class Database:
                 ),
             )
             conn.commit()
-            return True
+
+        if priority is not None and int(priority) != old_priority:
+            self.change_priority(config_id, int(priority))
+
+        return True
 
     def delete_config(self, config_id: int) -> bool:
-        """Delete an API configuration and normalize priorities of remaining configs."""
+        """Delete an API configuration, normalize priorities of remaining configs, and update rotation safely."""
         with self.get_connection() as conn:
             cursor = conn.execute("DELETE FROM api_configurations WHERE id = ?", (config_id,))
+            # If deleted config was the rotation cursor, clear last_config_id but preserve last_priority
+            conn.execute(
+                "UPDATE api_rotation_state SET last_config_id = NULL, updated_at = ? WHERE id = 1 AND last_config_id = ?",
+                (_utc_now_iso(), config_id),
+            )
             conn.commit()
             deleted = cursor.rowcount > 0
         if deleted:

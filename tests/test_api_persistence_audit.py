@@ -77,8 +77,11 @@ def test_02_edit_api_and_retrieve_updated(temp_db_path, crypto):
         display_name="Old Name",
         endpoint="https://old.endpoint.org/",
         encrypted_credential=crypto.encrypt("old_key"),
-        priority=2,
+        priority=1,
     )
+    # Insert additional configs so priority 5 exists in the consecutive sequence
+    for i in range(2, 6):
+        db.insert_config("md5decrypt", f"Provider {i}", f"https://p{i}.org/", crypto.encrypt(f"key{i}"), priority=i)
 
     updated = db.update_config(
         config_id=cfg_id,
