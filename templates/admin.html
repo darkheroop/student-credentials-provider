@@ -96,15 +96,16 @@
               </div>
 
               <div class="form-group">
-                <label for="priority" class="form-label">Priority (Lower = Higher)</label>
+                <label for="priority" class="form-label">Priority (1 = Highest)</label>
                 <input
                   type="number"
                   id="priority"
                   class="form-input"
-                  value="10"
+                  placeholder="Auto (Next in cycle)"
                   min="1"
-                  max="100"
+                  max="1000"
                 >
+                <small class="form-hint">Leave blank to automatically assign the next sequential priority number.</small>
               </div>
             </div>
 
@@ -157,8 +158,14 @@
         <!-- Configured APIs List -->
         <section class="admin-card list-card">
           <div class="list-header">
-            <h2 class="card-title">Configured Providers</h2>
-            <button id="refreshBtn" class="btn btn-sm btn-outline">Refresh</button>
+            <div>
+              <h2 class="card-title">Configured Providers</h2>
+              <small class="text-muted" style="font-size:0.8rem;">Priority 1 = Highest Priority &middot; Cyclic Rotation Active</small>
+            </div>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <button id="normalizePrioritiesBtn" class="btn btn-sm btn-outline" title="Normalize priorities to 1, 2, 3...">Normalize Order</button>
+              <button id="refreshBtn" class="btn btn-sm btn-outline">Refresh</button>
+            </div>
           </div>
 
           <div id="configsList" class="configs-list">

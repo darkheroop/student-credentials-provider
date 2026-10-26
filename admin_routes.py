@@ -247,6 +247,8 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
                 "last_success_at": c["last_success_at"],
                 "last_failure_at": c["last_failure_at"],
                 "last_error_category": c["last_error_category"],
+                "last_failure_reason": c.get("last_failure_reason", ""),
+                "consecutive_failures": c.get("consecutive_failures", 0),
                 "notes": c["notes"],
                 "created_at": c["created_at"],
                 "updated_at": c["updated_at"],
@@ -279,10 +281,15 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         if not valid_url:
             return jsonify({"success": False, "error": url_err}), 400
 
-        try:
-            priority_int = int(priority)
-        except (ValueError, TypeError):
-            priority_int = 10
+        priority_val = data.get("priority")
+        priority_int = None
+        if priority_val is not None and str(priority_val).strip() != "":
+            try:
+                parsed_pri = int(priority_val)
+                if parsed_pri > 0:
+                    priority_int = parsed_pri
+            except (ValueError, TypeError):
+                priority_int = None
 
         encrypted_cred = crypto.encrypt(credential)
         new_id = db.insert_config(
@@ -296,11 +303,14 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         )
 
         db.record_event(new_id, "created", f"Configuration created: {display_name}")
+        created_cfg = db.get_config_by_id(new_id)
+        assigned_pri = created_cfg["priority"] if created_cfg else 1
 
         return jsonify({
             "success": True,
-            "message": "API configuration created successfully.",
+            "message": f"API configuration created successfully (Priority {assigned_pri}).",
             "id": new_id,
+            "priority": assigned_pri,
         }), 201
 
     @admin_bp.route("/api/configs/<int:config_id>", methods=["PUT"])
@@ -449,6 +459,69 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         """Retrieve recent sanitized events for an API configuration."""
         events = db.get_events_for_config(config_id, limit=30)
         return jsonify({"success": True, "events": events})
+
+    @admin_bp.route("/api/configs/reorder", methods=["POST"])
+    @admin_required
+    def reorder_configs():
+        """Reorder API configurations giving consecutive priorities 1..N based on list of IDs."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        data = request.get_json(silent=True) or {}
+        config_ids = data.get("config_ids", [])
+        if not isinstance(config_ids, list) or not config_ids:
+            return jsonify({"success": False, "error": "List of config_ids is required."}), 400
+
+        success = db.reorder_priorities(config_ids)
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Priorities reordered successfully.",
+                "configs": db.get_all_configs(),
+            })
+        return jsonify({"success": False, "error": "Failed to reorder configurations."}), 500
+
+    @admin_bp.route("/api/configs/<int:config_id>/move", methods=["POST"])
+    @admin_required
+    def move_config(config_id: int):
+        """Move a configuration 'up' (higher priority) or 'down' (lower priority)."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        data = request.get_json(silent=True) or {}
+        direction = str(data.get("direction") or "").strip().lower()
+        if direction not in ("up", "down"):
+            return jsonify({"success": False, "error": "Direction must be 'up' or 'down'."}), 400
+
+        success = db.move_priority(config_id, direction)
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Configuration priority moved {direction}.",
+                "configs": db.get_all_configs(),
+            })
+        return jsonify({"success": False, "error": f"Cannot move configuration {direction}."}), 400
+
+    @admin_bp.route("/api/configs/normalize", methods=["POST"])
+    @admin_required
+    def normalize_configs():
+        """Normalize all configuration priorities to consecutive 1, 2, 3..."""
+        if not verify_csrf():
+            return jsonify({"success": False, "error": "Invalid CSRF token."}), 403
+
+        configs = db.normalize_priorities()
+        return jsonify({
+            "success": True,
+            "message": "Priorities normalized successfully.",
+            "configs": configs,
+        })
+
+    @admin_bp.route("/api/rotation-state", methods=["GET"])
+    @admin_required
+    def get_rotation_state():
+        """Fetch current persistent cyclic rotation state."""
+        state = db.get_rotation_state()
+        return jsonify({"success": True, "rotation_state": state})
 
     # ── User Profile & Account Credentials Management ───────────────────
 

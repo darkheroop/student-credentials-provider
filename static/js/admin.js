@@ -144,8 +144,28 @@ document.addEventListener('DOMContentLoaded', () => {
       item.className = 'config-item';
 
       let statusDisplay = cfg.health_status;
+      let statusLabel = 'Active';
+      let statusClass = 'status-active';
+
       if (!cfg.enabled) {
         statusDisplay = 'disabled';
+        statusLabel = 'Manually Disabled';
+        statusClass = 'status-disabled';
+      } else if (cfg.health_status === 'quota_exhausted') {
+        statusLabel = 'Quota Exhausted';
+        statusClass = 'status-quota_exhausted';
+      } else if (cfg.health_status === 'rate_limited') {
+        statusLabel = 'Rate Limited (HTTP 429)';
+        statusClass = 'status-rate_limited';
+      } else if (cfg.health_status === 'config_error' || cfg.health_status === 'auth_failed') {
+        statusLabel = 'Configuration Error (Review Required)';
+        statusClass = 'status-config_error';
+      } else if (cfg.health_status === 'degraded' || cfg.health_status === 'temporarily_unavailable' || cfg.health_status === 'unhealthy') {
+        statusLabel = 'Temporarily Unavailable';
+        statusClass = 'status-temporarily_unavailable';
+      } else {
+        statusLabel = 'Active';
+        statusClass = 'status-active';
       }
 
       const formatDate = (val) => {
@@ -162,24 +182,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const title = document.createElement('div');
       title.className = 'config-item-title';
-      title.textContent = `${cfg.display_name} (${cfg.provider_name.toUpperCase()})`;
+
+      // Priority pill indicator (Priority 1 = Highest)
+      const priPill = document.createElement('span');
+      priPill.className = `priority-pill ${cfg.priority === 1 ? 'priority-pill-primary' : ''}`;
+      priPill.textContent = cfg.priority === 1 ? 'Priority 1 (Highest)' : `Priority ${cfg.priority}`;
+      title.appendChild(priPill);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = `${cfg.display_name} (${cfg.provider_name.toUpperCase()})`;
+      title.appendChild(nameSpan);
 
       const badge = document.createElement('span');
-      badge.className = `status-badge status-${statusDisplay}`;
-      badge.textContent = statusDisplay.replace('_', ' ');
+      badge.className = `status-badge ${statusClass}`;
+      badge.textContent = statusLabel;
       title.appendChild(badge);
       header.appendChild(title);
+
+      // Reorder buttons (Move Up / Down)
+      const reorderGroup = document.createElement('div');
+      reorderGroup.style.display = 'flex';
+      reorderGroup.style.gap = '4px';
+      reorderGroup.style.alignItems = 'center';
+
+      const upBtn = document.createElement('button');
+      upBtn.className = 'btn-icon-sm';
+      upBtn.title = 'Move Up (Higher Priority)';
+      upBtn.innerHTML = '&#9650;';
+      upBtn.disabled = (cfg.priority === 1 || configs.indexOf(cfg) === 0);
+      upBtn.onclick = () => moveConfig(cfg.id, 'up');
+      reorderGroup.appendChild(upBtn);
+
+      const downBtn = document.createElement('button');
+      downBtn.className = 'btn-icon-sm';
+      downBtn.title = 'Move Down (Lower Priority)';
+      downBtn.innerHTML = '&#9660;';
+      downBtn.disabled = (configs.indexOf(cfg) === configs.length - 1);
+      downBtn.onclick = () => moveConfig(cfg.id, 'down');
+      reorderGroup.appendChild(downBtn);
+
+      header.appendChild(reorderGroup);
 
       const details = document.createElement('div');
       details.className = 'config-item-details';
 
       details.innerHTML = `
-        <div class="detail-line"><strong>Priority:</strong> ${cfg.priority}</div>
+        <div class="detail-line"><strong>Priority:</strong> #${cfg.priority}</div>
         <div class="detail-line"><strong>Key:</strong> <code>${cfg.masked_credential}</code></div>
         <div class="detail-line"><strong>Endpoint:</strong> <code>${cfg.endpoint}</code></div>
         <div class="detail-line"><strong>Last Success:</strong> ${formatDate(cfg.last_success_at)}</div>
+        <div class="detail-line"><strong>Failures:</strong> ${cfg.consecutive_failures || 0} consecutive</div>
         <div class="detail-line"><strong>Last Error:</strong> ${cfg.last_error_category || 'None'}</div>
-        ${cfg.paused_until ? `<div class="detail-line"><strong>Paused Until:</strong> ${formatDate(cfg.paused_until)}</div>` : ''}
+        ${cfg.last_failure_reason ? `<div class="detail-line" style="grid-column: 1 / -1;"><strong>Failure Reason:</strong> ${cfg.last_failure_reason}</div>` : ''}
+        ${cfg.paused_until ? `<div class="detail-line"><strong>Cooldown Until:</strong> ${formatDate(cfg.paused_until)}</div>` : ''}
         ${cfg.notes ? `<div class="detail-line"><strong>Notes:</strong> ${cfg.notes}</div>` : ''}
       `;
 
@@ -193,7 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
       testBtn.onclick = () => testConnection(cfg.id, testBtn);
       actions.appendChild(testBtn);
 
-      // Reactivate button (if paused)
+      // Reactivate button (if paused, exhausted, or in error)
       if (cfg.health_status !== 'active' && cfg.enabled) {
         const reactivateBtn = document.createElement('button');
         reactivateBtn.className = 'btn btn-sm btn-outline';
@@ -301,6 +356,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function moveConfig(configId, direction) {
+    try {
+      const res = await apiFetch(`/admin/api/configs/${configId}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ direction }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        loadConfigs();
+      } else {
+        showAlert(data.error || 'Failed to move configuration.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  }
+
   function startEditConfig(cfg) {
     formMode.value = 'edit';
     formConfigId.value = cfg.id;
@@ -324,7 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
     formConfigId.value = '';
     formTitle.textContent = 'Add API Configuration';
     apiForm.reset();
-    priorityInput.value = '10';
+    priorityInput.value = '';
     endpointInput.value = 'https://api.md5decrypt.net/';
     credentialLabel.textContent = 'API Key / Credential *';
     credentialHint.textContent = 'Key is encrypted at rest using HMAC-SHA256 authenticated encryption.';
@@ -335,6 +407,22 @@ document.addEventListener('DOMContentLoaded', () => {
   cancelEditBtn?.addEventListener('click', resetForm);
   refreshBtn?.addEventListener('click', loadConfigs);
 
+  const normalizePrioritiesBtn = document.getElementById('normalizePrioritiesBtn');
+  normalizePrioritiesBtn?.addEventListener('click', async () => {
+    try {
+      const res = await apiFetch('/admin/api/configs/normalize', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showAlert('Priorities normalized to consecutive sequence (1, 2, 3...).', 'success');
+        loadConfigs();
+      } else {
+        showAlert(data.error || 'Failed to normalize priorities.', 'error');
+      }
+    } catch (err) {
+      showAlert(`Error: ${err.message}`, 'error');
+    }
+  });
+
   apiForm?.addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -342,7 +430,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const configId = formConfigId.value;
     const displayName = displayNameInput.value.trim();
     const providerName = providerNameSelect.value.trim();
-    const priority = parseInt(priorityInput.value, 10) || 10;
+    const priorityVal = priorityInput.value.trim();
+    const priority = priorityVal ? parseInt(priorityVal, 10) : null;
     const endpoint = endpointInput.value.trim();
     const credential = credentialInput.value.trim();
     const notes = notesInput.value.trim();

@@ -238,6 +238,7 @@ class Database:
 
     def init_db(self):
         """Create database tables and indexes if they do not exist."""
+        now_iso = _utc_now_iso()
         if self.is_postgres:
             with self.get_connection() as conn:
                 conn.execute("""
@@ -256,6 +257,8 @@ class Database:
                         last_success_at TEXT DEFAULT NULL,
                         last_failure_at TEXT DEFAULT NULL,
                         last_error_category TEXT DEFAULT NULL,
+                        last_failure_reason TEXT DEFAULT '',
+                        consecutive_failures INTEGER NOT NULL DEFAULT 0,
                         notes TEXT DEFAULT '',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -296,6 +299,32 @@ class Database:
                         updated_at TEXT NOT NULL
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS api_rotation_state (
+                        id INTEGER PRIMARY KEY,
+                        last_config_id INTEGER DEFAULT NULL,
+                        last_priority INTEGER DEFAULT NULL,
+                        rotation_counter BIGINT NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                # Safe migrations for existing PostgreSQL tables
+                try:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0")
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS last_failure_reason TEXT DEFAULT ''")
+                except Exception as e:
+                    logger.debug("PostgreSQL column addition: %s", e)
+
+                # Seed rotation state row if absent
+                conn.execute(
+                    """
+                    INSERT INTO api_rotation_state (id, last_config_id, last_priority, rotation_counter, updated_at)
+                    VALUES (1, NULL, NULL, 0, ?)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (now_iso,),
+                )
+
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_api_config_eligibility ON api_configurations(enabled, health_status, priority)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_api_event_history_config ON api_event_history(api_config_id, timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username)")
@@ -320,6 +349,8 @@ class Database:
                         last_success_at TEXT DEFAULT NULL,
                         last_failure_at TEXT DEFAULT NULL,
                         last_error_category TEXT DEFAULT NULL,
+                        last_failure_reason TEXT DEFAULT '',
+                        consecutive_failures INTEGER NOT NULL DEFAULT 0,
                         notes TEXT DEFAULT '',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -358,6 +389,14 @@ class Database:
                         updated_at TEXT NOT NULL
                     );
 
+                    CREATE TABLE IF NOT EXISTS api_rotation_state (
+                        id INTEGER PRIMARY KEY,
+                        last_config_id INTEGER DEFAULT NULL,
+                        last_priority INTEGER DEFAULT NULL,
+                        rotation_counter INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL
+                    );
+
                     CREATE INDEX IF NOT EXISTS idx_api_config_eligibility
                     ON api_configurations(enabled, health_status, priority);
 
@@ -370,6 +409,21 @@ class Database:
                     CREATE INDEX IF NOT EXISTS idx_client_api_keys_key
                     ON client_api_keys(api_key);
                 """)
+                # Safe migrations for existing SQLite tables
+                cols = [r[1] for r in conn.execute("PRAGMA table_info(api_configurations)").fetchall()]
+                if "consecutive_failures" not in cols:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0")
+                if "last_failure_reason" not in cols:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN last_failure_reason TEXT DEFAULT ''")
+                
+                # Seed rotation state row if absent
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO api_rotation_state (id, last_config_id, last_priority, rotation_counter, updated_at)
+                    VALUES (1, NULL, NULL, 0, ?)
+                    """,
+                    (now_iso,),
+                )
                 conn.commit()
 
     def _migrate_sqlite_to_postgres_if_empty(self):
@@ -528,18 +582,22 @@ class Database:
         Retrieve all enabled, healthy, non-paused API configurations,
         ordered by priority (ascending).
         
-        Automatically clears expired paused_until windows back to 'active'.
+        Automatically clears expired paused_until windows back to 'active'
+        for configurations that are not manually disabled or in configuration error.
         """
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
-            # First: automatically unpause configurations whose pause window has passed
+            # Unpause configurations whose cooldown window has expired
             conn.execute(
                 """
                 UPDATE api_configurations
-                SET health_status = 'active', paused_until = NULL, updated_at = ?
+                SET health_status = 'active',
+                    paused_until = NULL,
+                    updated_at = ?
                 WHERE enabled = 1
                   AND paused_until IS NOT NULL
                   AND paused_until <= ?
+                  AND health_status NOT IN ('config_error', 'auth_failed')
                 """,
                 (now_iso, now_iso),
             )
@@ -550,10 +608,112 @@ class Database:
                 SELECT * FROM api_configurations
                 WHERE enabled = 1
                   AND health_status = 'active'
+                  AND (paused_until IS NULL OR paused_until <= ?)
                 ORDER BY priority ASC, id ASC
-                """
+                """,
+                (now_iso,),
             )
             return [dict(r) for r in cursor.fetchall()]
+
+    def get_next_priority(self) -> int:
+        """Return the next available sequential priority (max priority + 1, or 1 if empty)."""
+        with self.get_connection() as conn:
+            cursor = conn.execute("SELECT COALESCE(MAX(priority), 0) + 1 AS next_pri FROM api_configurations")
+            row = cursor.fetchone()
+            if row:
+                return row["next_pri"] if "next_pri" in row else row[0]
+            return 1
+
+    def normalize_priorities(self) -> list[dict[str, Any]]:
+        """
+        Normalize priorities of all api_configurations to sequential 1, 2, 3...
+        preserving existing relative priority order and ID tie-breaking.
+        """
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            cursor = conn.execute("SELECT id FROM api_configurations ORDER BY priority ASC, id ASC")
+            rows = cursor.fetchall()
+            for idx, r in enumerate(rows, start=1):
+                cfg_id = r["id"] if (isinstance(r, dict) or hasattr(r, "__getitem__")) else r[0]
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (idx, now_iso, cfg_id),
+                )
+            conn.commit()
+        return self.get_all_configs()
+
+    def reorder_priorities(self, config_ids: list[int]) -> bool:
+        """
+        Reorder configurations giving consecutive priorities 1..N
+        based on the ordered list of config_ids.
+        """
+        if not config_ids:
+            return False
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            for priority_num, cfg_id in enumerate(config_ids, start=1):
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (priority_num, now_iso, int(cfg_id)),
+                )
+            conn.commit()
+        return True
+
+    def move_priority(self, config_id: int, direction: str) -> bool:
+        """
+        Move a configuration 'up' (higher priority, smaller number)
+        or 'down' (lower priority, larger number) by swapping with adjacent neighbor,
+        then normalizes all priorities.
+        """
+        configs = self.get_all_configs()
+        if not configs:
+            return False
+
+        idx = next((i for i, c in enumerate(configs) if c["id"] == config_id), None)
+        if idx is None:
+            return False
+
+        if direction == "up" and idx > 0:
+            configs[idx - 1], configs[idx] = configs[idx], configs[idx - 1]
+        elif direction == "down" and idx < len(configs) - 1:
+            configs[idx], configs[idx + 1] = configs[idx + 1], configs[idx]
+        else:
+            return False  # Already at boundary
+
+        return self.reorder_priorities([c["id"] for c in configs])
+
+    def get_rotation_state(self) -> dict[str, Any]:
+        """Fetch the persistent rotation state from PostgreSQL/SQLite."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT last_config_id, last_priority, rotation_counter, updated_at FROM api_rotation_state WHERE id = 1"
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "last_config_id": row["last_config_id"] if "last_config_id" in row else row[0],
+                    "last_priority": row["last_priority"] if "last_priority" in row else row[1],
+                    "rotation_counter": int(row["rotation_counter"] if "rotation_counter" in row else row[2]),
+                    "updated_at": row["updated_at"] if "updated_at" in row else row[3],
+                }
+            return {"last_config_id": None, "last_priority": None, "rotation_counter": 0, "updated_at": ""}
+
+    def update_rotation_state(self, last_config_id: int | None, last_priority: int | None = None) -> None:
+        """Atomically update the last used config and increment rotation counter."""
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE api_rotation_state
+                SET last_config_id = ?,
+                    last_priority = ?,
+                    rotation_counter = rotation_counter + 1,
+                    updated_at = ?
+                WHERE id = 1
+                """,
+                (last_config_id, last_priority, now_iso),
+            )
+            conn.commit()
 
     def insert_config(
         self,
@@ -561,7 +721,7 @@ class Database:
         display_name: str,
         endpoint: str,
         encrypted_credential: str,
-        priority: int = 10,
+        priority: int | None = None,
         enabled: int = 1,
         auth_config: dict | None = None,
         provider_config: dict | None = None,
@@ -573,28 +733,64 @@ class Database:
         provider_json = json.dumps(provider_config or {})
 
         with self.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO api_configurations (
-                    provider_name, display_name, endpoint, encrypted_credential,
-                    auth_config, provider_config, priority, enabled,
-                    health_status, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-                """,
-                (
-                    provider_name.strip().lower(),
-                    display_name.strip(),
-                    endpoint.strip(),
-                    encrypted_credential,
-                    auth_json,
-                    provider_json,
-                    int(priority),
-                    1 if enabled else 0,
-                    (notes or "").strip(),
-                    now_iso,
-                    now_iso,
-                ),
-            )
+            if priority is None or int(priority) <= 0:
+                # Atomically assign next priority: MAX(priority) + 1
+                cursor = conn.execute(
+                    """
+                    INSERT INTO api_configurations (
+                        provider_name, display_name, endpoint, encrypted_credential,
+                        auth_config, provider_config, priority, enabled,
+                        health_status, notes, created_at, updated_at,
+                        consecutive_failures, last_failure_reason
+                    ) VALUES (
+                        ?, ?, ?, ?,
+                        ?, ?, (SELECT COALESCE(MAX(priority), 0) + 1 FROM api_configurations), ?,
+                        'active', ?, ?, ?,
+                        0, ''
+                    )
+                    """,
+                    (
+                        provider_name.strip().lower(),
+                        display_name.strip(),
+                        endpoint.strip(),
+                        encrypted_credential,
+                        auth_json,
+                        provider_json,
+                        1 if enabled else 0,
+                        (notes or "").strip(),
+                        now_iso,
+                        now_iso,
+                    ),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO api_configurations (
+                        provider_name, display_name, endpoint, encrypted_credential,
+                        auth_config, provider_config, priority, enabled,
+                        health_status, notes, created_at, updated_at,
+                        consecutive_failures, last_failure_reason
+                    ) VALUES (
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        'active', ?, ?, ?,
+                        0, ''
+                    )
+                    """,
+                    (
+                        provider_name.strip().lower(),
+                        display_name.strip(),
+                        endpoint.strip(),
+                        encrypted_credential,
+                        auth_json,
+                        provider_json,
+                        int(priority),
+                        1 if enabled else 0,
+                        (notes or "").strip(),
+                        now_iso,
+                        now_iso,
+                    ),
+                )
             conn.commit()
             return cursor.lastrowid
 
@@ -657,11 +853,17 @@ class Database:
             return True
 
     def delete_config(self, config_id: int) -> bool:
-        """Delete an API configuration and its event history."""
+        """Delete an API configuration and normalize priorities of remaining configs."""
         with self.get_connection() as conn:
             cursor = conn.execute("DELETE FROM api_configurations WHERE id = ?", (config_id,))
             conn.commit()
-            return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+        if deleted:
+            try:
+                self.normalize_priorities()
+            except Exception as e:
+                logger.warning("Priority normalization after delete failed: %s", e)
+        return deleted
 
     def set_enabled(self, config_id: int, enabled: bool) -> bool:
         """Toggle an API configuration's enabled state."""
@@ -680,27 +882,46 @@ class Database:
         health_status: str,
         paused_until: str | None = None,
         error_category: str | None = None,
+        failure_reason: str | None = None,
+        increment_failure: bool = True,
     ) -> bool:
         """Update the health/availability status of an API configuration."""
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE api_configurations
-                SET health_status = ?,
-                    paused_until = ?,
-                    last_failure_at = ?,
-                    last_error_category = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (health_status, paused_until, now_iso, error_category, now_iso, config_id),
-            )
+            if increment_failure:
+                cursor = conn.execute(
+                    """
+                    UPDATE api_configurations
+                    SET health_status = ?,
+                        paused_until = ?,
+                        last_failure_at = ?,
+                        last_error_category = ?,
+                        last_failure_reason = ?,
+                        consecutive_failures = consecutive_failures + 1,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (health_status, paused_until, now_iso, error_category, failure_reason or "", now_iso, config_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE api_configurations
+                    SET health_status = ?,
+                        paused_until = ?,
+                        last_failure_at = ?,
+                        last_error_category = ?,
+                        last_failure_reason = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (health_status, paused_until, now_iso, error_category, failure_reason or "", now_iso, config_id),
+                )
             conn.commit()
             return cursor.rowcount > 0
 
     def record_success(self, config_id: int, duration: float = 0.0) -> bool:
-        """Update last_success_at and reset error category upon successful call."""
+        """Update last_success_at and reset error fields upon successful call."""
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
             cursor = conn.execute(
@@ -710,6 +931,8 @@ class Database:
                     paused_until = NULL,
                     last_success_at = ?,
                     last_error_category = NULL,
+                    last_failure_reason = '',
+                    consecutive_failures = 0,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -728,6 +951,8 @@ class Database:
                 SET health_status = 'active',
                     paused_until = NULL,
                     last_error_category = NULL,
+                    last_failure_reason = '',
+                    consecutive_failures = 0,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -823,7 +1048,7 @@ class Database:
             display_name="MD5Decrypt Default",
             endpoint=self.config.MD5DECRYPT_API_URL or "https://api.md5decrypt.net/",
             encrypted_credential=encrypted,
-            priority=10,
+            priority=1,
             enabled=1,
             notes="Initial default provider seeded from environment variable.",
         )
