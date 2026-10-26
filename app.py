@@ -91,6 +91,8 @@ def set_security_headers(response):
 # ── Page routes ─────────────────────────────────────────────────────────
 
 @app.route("/")
+@app.route("/api/index")
+@app.route("/api/index.py")
 def index():
     """Render the main landing page and Student Lookup dashboard."""
     return render_template("index.html")
