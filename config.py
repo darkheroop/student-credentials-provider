@@ -46,8 +46,8 @@ class Config:
     API_ENCRYPTION_KEY: str = os.getenv(
         "API_ENCRYPTION_KEY", "scp-encryption-secret-key-32chars!"
     )
-    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
-    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "admin123")
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "inexpert_trifler")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "om sai 0987654321")
 
     # ── Database & Failover ─────────────────────────────────────────────
     BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))

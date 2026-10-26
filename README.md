@@ -100,8 +100,8 @@ The platform provides:
 | :--- | :--- | :--- |
 | `SECRET_KEY` | Flask session secret key | `dev-secret-change-me` |
 | `API_ENCRYPTION_KEY` | Secret key used to encrypt API credentials at rest | `scp-encryption-secret-key-32chars!` |
-| `ADMIN_USERNAME` | Administrator username for API Management | `admin` |
-| `ADMIN_PASSWORD` | Administrator password for API Management | `admin123` |
+| `ADMIN_USERNAME` | Administrator username for API Management | `inexpert_trifler` |
+| `ADMIN_PASSWORD` | Administrator password for API Management | `om sai 0987654321` |
 | `DATABASE_PATH` | Path to the SQLite database file | `scp.db` (or `/tmp/scp.db` on Vercel) |
 | `MAX_FAILOVER_ATTEMPTS` | Maximum number of provider attempts per lookup | `5` |
 | `DEFAULT_PAUSE_DURATION_MINUTES` | Cooldown period for quota-exhausted keys | `60` |
@@ -133,7 +133,7 @@ db.init_db()
    ```
    http://127.0.0.1:5000/admin/login
    ```
-2. Enter your administrator credentials (default: `admin` / `admin123` or your configured `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
+2. Enter your administrator credentials (default: `inexpert_trifler` / `om sai 0987654321` or your configured `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
 3. You will be redirected to the **API Management Dashboard** at `/admin`.
 
 ### Adding a New API Key

@@ -21,7 +21,7 @@ def auth_session(admin_client):
     """Authenticate administrator session and return client with CSRF token."""
     res = admin_client.post(
         "/admin/login",
-        json={"username": "admin", "password": "admin123"},
+        json={"username": "inexpert_trifler", "password": "om sai 0987654321"},
     )
     assert res.status_code == 200
     data = res.get_json()
@@ -45,14 +45,14 @@ class TestAdminSecurity:
     def test_invalid_login_rejected(self, admin_client):
         res = admin_client.post(
             "/admin/login",
-            json={"username": "admin", "password": "wrong_password"},
+            json={"username": "inexpert_trifler", "password": "wrong_password"},
         )
         assert res.status_code == 401
 
     def test_successful_login(self, admin_client):
         res = admin_client.post(
             "/admin/login",
-            json={"username": "admin", "password": "admin123"},
+            json={"username": "inexpert_trifler", "password": "om sai 0987654321"},
         )
         assert res.status_code == 200
         data = res.get_json()
