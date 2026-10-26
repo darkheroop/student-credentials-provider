@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Learn — SCP Student Credentials Provider</title>
+  <meta name="description" content="Learn about cryptographic hashing, encryption, encoding, and security best practices">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔐</text></svg>">
+</head>
+<body>
+
+  <!-- ========== STATUS ANNOUNCER (SR-ONLY) ========== -->
+  <div id="status-announcer" role="status" aria-live="polite" class="sr-only"></div>
+
+  <!-- ========== NAVIGATION ========== -->
+  <header class="site-header" role="banner">
+    <nav class="navbar" aria-label="Primary navigation">
+      <div class="navbar-container">
+        <a href="/" class="navbar-brand" aria-label="SCP Home">
+          <span class="brand-icon" aria-hidden="true">&#x1F6E1;</span>
+          <span class="brand-text">SCP</span>
+        </a>
+
+        <button class="navbar-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav-menu" aria-label="Toggle navigation menu">
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+        </button>
+
+        <ul class="navbar-menu" id="nav-menu" role="menubar">
+          <li role="none"><a href="/" class="nav-link" role="menuitem">Home</a></li>
+          <li role="none"><a href="/#student-lookup" class="nav-link" role="menuitem">Student Lookup</a></li>
+          <li role="none"><a href="/learn" class="nav-link active" role="menuitem">Learn</a></li>
+          <li role="none"><a href="/documentation" class="nav-link" role="menuitem">Documentation</a></li>
+          <li role="none"><a href="/about" class="nav-link" role="menuitem">About</a></li>
+        </ul>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-content">
+
+    <!-- ========== PAGE HEADER ========== -->
+    <section class="page-hero" aria-labelledby="learn-heading">
+      <div class="container">
+        <h1 id="learn-heading" class="page-title">Learn About Hashing &amp; Security</h1>
+        <p class="page-subtitle">Build a solid foundation in cryptographic concepts, hash analysis, and modern security practices.</p>
+      </div>
+    </section>
+
+    <div class="container learn-container">
+
+      <!-- ========== A. WHAT IS A HASH? ========== -->
+      <section class="learn-section" id="what-is-hash" aria-labelledby="hash-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F9E9;</span>
+            <h2 id="hash-heading">What Is a Hash?</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              A <strong>hash function</strong> is a mathematical algorithm that takes an input (or &ldquo;message&rdquo;)
+              of any size and produces a fixed-size string of characters, known as the <strong>hash value</strong>,
+              <strong>digest</strong>, or <strong>checksum</strong>.
+            </p>
+
+            <h3>Key Properties</h3>
+            <div class="property-grid">
+              <div class="property-item">
+                <h4>&#x1F512; One-Way</h4>
+                <p>It is computationally infeasible to reverse a hash back to the original input. You cannot &ldquo;decrypt&rdquo; a hash.</p>
+              </div>
+              <div class="property-item">
+                <h4>&#x1F4CF; Fixed Length</h4>
+                <p>Regardless of the input size, the output hash is always the same length. An MD5 hash is always 32 hexadecimal characters.</p>
+              </div>
+              <div class="property-item">
+                <h4>&#x1F504; Deterministic</h4>
+                <p>The same input always produces the same hash. This makes hashes useful for data verification and integrity checks.</p>
+              </div>
+              <div class="property-item">
+                <h4>&#x26A1; Avalanche Effect</h4>
+                <p>A small change in the input produces a dramatically different hash. Even changing a single character creates an entirely new digest.</p>
+              </div>
+            </div>
+
+            <h3>Example</h3>
+            <div class="code-example">
+              <div class="code-row">
+                <span class="code-label">Input:</span>
+                <code>"hello"</code>
+              </div>
+              <div class="code-row">
+                <span class="code-label">MD5 Hash:</span>
+                <code>5d41402abc4b2a76b9719d911017c592</code>
+              </div>
+              <div class="code-row">
+                <span class="code-label">Input:</span>
+                <code>"Hello"</code>
+              </div>
+              <div class="code-row">
+                <span class="code-label">MD5 Hash:</span>
+                <code>8b1a9953c4611296a827abf8c47804d7</code>
+              </div>
+            </div>
+            <p class="text-muted">
+              Notice how changing just the capitalization of the first letter produces a completely different hash.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      <!-- ========== B. WHAT IS MD5? ========== -->
+      <section class="learn-section" id="what-is-md5" aria-labelledby="md5-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F5DD;&#xFE0F;</span>
+            <h2 id="md5-heading">What Is MD5?</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              <strong>MD5 (Message-Digest Algorithm 5)</strong> is a widely known hash function designed by
+              Ronald Rivest in 1991. It produces a 128-bit (16-byte) hash value, typically rendered as a
+              32-character hexadecimal string.
+            </p>
+
+            <div class="info-table-wrapper">
+              <table class="info-table">
+                <thead>
+                  <tr>
+                    <th>Property</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Output Size</td>
+                    <td>128 bits (32 hex characters)</td>
+                  </tr>
+                  <tr>
+                    <td>Block Size</td>
+                    <td>512 bits</td>
+                  </tr>
+                  <tr>
+                    <td>Year Introduced</td>
+                    <td>1991</td>
+                  </tr>
+                  <tr>
+                    <td>Designer</td>
+                    <td>Ronald Rivest</td>
+                  </tr>
+                  <tr>
+                    <td>Status</td>
+                    <td><span class="badge badge--warning">Cryptographically Broken</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Why Is MD5 Considered Insecure?</h3>
+            <ul class="styled-list">
+              <li><strong>Collision Vulnerability:</strong> Researchers demonstrated practical collision attacks as early as 2004, meaning two different inputs can produce the same MD5 hash.</li>
+              <li><strong>Speed:</strong> MD5 is extremely fast to compute, which makes brute-force and dictionary attacks feasible against hashed passwords.</li>
+              <li><strong>Rainbow Tables:</strong> Pre-computed lookup tables exist for billions of common MD5 hashes, enabling near-instant reversal of unsalted hashes.</li>
+            </ul>
+
+            <div class="callout callout--warning">
+              <strong>Important:</strong> MD5 should never be used for password hashing or security-critical applications.
+              It remains relevant only for non-security purposes like checksums for file integrity verification.
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ========== C. HASHING VS ENCRYPTION VS ENCODING ========== -->
+      <section class="learn-section" id="comparison" aria-labelledby="comparison-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x2696;&#xFE0F;</span>
+            <h2 id="comparison-heading">Hashing vs Encryption vs Encoding</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              These three concepts are frequently confused but serve fundamentally different purposes.
+              Understanding their distinctions is crucial for cybersecurity literacy.
+            </p>
+
+            <div class="info-table-wrapper">
+              <table class="info-table comparison-table">
+                <thead>
+                  <tr>
+                    <th>Aspect</th>
+                    <th>Hashing</th>
+                    <th>Encryption</th>
+                    <th>Encoding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Purpose</strong></td>
+                    <td>Data integrity &amp; verification</td>
+                    <td>Data confidentiality</td>
+                    <td>Data representation &amp; transport</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Reversible?</strong></td>
+                    <td>No (one-way)</td>
+                    <td>Yes (with key)</td>
+                    <td>Yes (no key needed)</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Uses a Key?</strong></td>
+                    <td>No</td>
+                    <td>Yes</td>
+                    <td>No</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Output Size</strong></td>
+                    <td>Fixed length</td>
+                    <td>Variable (&#x2265; input)</td>
+                    <td>Variable</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Security Goal</strong></td>
+                    <td>Integrity</td>
+                    <td>Confidentiality</td>
+                    <td>None (not a security tool)</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Examples</strong></td>
+                    <td>MD5, SHA-256, bcrypt</td>
+                    <td>AES, RSA, ChaCha20</td>
+                    <td>Base64, URL encoding, UTF-8</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>&#x1F512; Hashing</h3>
+            <p>
+              Hashing transforms data into a fixed-size digest. It is a <em>one-way</em> process — you
+              cannot recover the original data from the hash alone. Hashing is used to verify data integrity,
+              store passwords securely, and create digital signatures.
+            </p>
+
+            <h3>&#x1F510; Encryption</h3>
+            <p>
+              Encryption transforms data into ciphertext using a key. It is a <em>two-way</em> process —
+              authorized parties with the correct key can decrypt the data back to its original form.
+              Encryption protects data confidentiality during storage and transmission.
+            </p>
+
+            <h3>&#x1F4E6; Encoding</h3>
+            <p>
+              Encoding transforms data into a different format for safe transport or storage. It is
+              <em>freely reversible</em> and provides <strong>no security</strong>. Common examples include
+              Base64 encoding for binary data in text formats and URL encoding for special characters.
+            </p>
+
+            <div class="callout callout--info">
+              <strong>Key Takeaway:</strong> Encoding is not encryption. Base64 is not a security measure.
+              If you need to protect data, use encryption. If you need to verify data, use hashing.
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ========== D. HOW HASH LOOKUP WORKS ========== -->
+      <section class="learn-section" id="how-lookup-works" aria-labelledby="lookup-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F50D;</span>
+            <h2 id="lookup-heading">How Hash Lookup Works</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              Hash lookup (sometimes called &ldquo;hash reversal&rdquo; or &ldquo;hash cracking&rdquo;) is the process
+              of finding the original input that produces a given hash. Since hash functions are one-way,
+              this is done through <strong>lookup databases</strong> rather than mathematical reversal.
+            </p>
+
+            <h3>Step-by-Step Process</h3>
+            <ol class="numbered-steps">
+              <li>
+                <strong>Hash Submission:</strong> The user provides a hash value (e.g., an MD5 digest) to the lookup service.
+              </li>
+              <li>
+                <strong>Database Search:</strong> The service checks its database of pre-computed hash-to-plaintext
+                mappings. These databases contain billions of entries generated from dictionaries, common passwords,
+                and pattern-based wordlists.
+              </li>
+              <li>
+                <strong>Match Check:</strong> If the hash exists in the database, the corresponding plaintext is returned.
+                If not, the service reports that no match was found.
+              </li>
+              <li>
+                <strong>Result Interpretation:</strong> A &ldquo;found&rdquo; result means the hash corresponds to a known
+                plaintext. A &ldquo;not found&rdquo; result means the plaintext is not in the service&rsquo;s database — it
+                does not mean the hash is uncrackable.
+              </li>
+            </ol>
+
+            <h3>Lookup Pipeline Diagram</h3>
+            <div class="diagram-container" aria-label="Hash lookup pipeline diagram">
+              <div class="diagram-flow">
+                <div class="diagram-box diagram-box--user">
+                  <div class="diagram-box-icon">&#x1F464;</div>
+                  <div class="diagram-box-label">User</div>
+                  <div class="diagram-box-detail">Submits hash</div>
+                </div>
+                <div class="diagram-arrow" aria-hidden="true">&rarr;</div>
+                <div class="diagram-box diagram-box--app">
+                  <div class="diagram-box-icon">&#x1F5A5;&#xFE0F;</div>
+                  <div class="diagram-box-label">Application</div>
+                  <div class="diagram-box-detail">Validates input</div>
+                </div>
+                <div class="diagram-arrow" aria-hidden="true">&rarr;</div>
+                <div class="diagram-box diagram-box--api">
+                  <div class="diagram-box-icon">&#x1F310;</div>
+                  <div class="diagram-box-label">Lookup API</div>
+                  <div class="diagram-box-detail">Searches database</div>
+                </div>
+                <div class="diagram-arrow" aria-hidden="true">&rarr;</div>
+                <div class="diagram-box diagram-box--result">
+                  <div class="diagram-box-icon">&#x1F4CB;</div>
+                  <div class="diagram-box-label">Result</div>
+                  <div class="diagram-box-detail">Found / Not Found</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="callout callout--info">
+              <strong>Note:</strong> Hash lookup services are not &ldquo;decrypting&rdquo; the hash. They are
+              searching a database of previously computed hashes. This distinction is important — hashing is
+              not encryption, and lookup is not decryption.
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ========== E. SALTED PASSWORD HASHES ========== -->
+      <section class="learn-section" id="salted-hashes" aria-labelledby="salt-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F9C2;</span>
+            <h2 id="salt-heading">Salted Password Hashes</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              A <strong>salt</strong> is a random value added to a password before hashing. The salt ensures that
+              identical passwords produce different hashes, defeating pre-computed lookup tables and rainbow table attacks.
+            </p>
+
+            <h3>How Salting Works</h3>
+            <div class="code-example">
+              <div class="code-row">
+                <span class="code-label">Password:</span>
+                <code>"mypassword"</code>
+              </div>
+              <div class="code-row">
+                <span class="code-label">Salt:</span>
+                <code>"x8Kp2mQz"</code>
+              </div>
+              <div class="code-row">
+                <span class="code-label">Combined:</span>
+                <code>"x8Kp2mQzmypassword"</code>
+              </div>
+              <div class="code-row">
+                <span class="code-label">Hash:</span>
+                <code>a7f2c8e1... (unique to this salt)</code>
+              </div>
+            </div>
+
+            <h3>Why Salts Matter</h3>
+            <ul class="styled-list">
+              <li><strong>Unique Hashes:</strong> Even if two users have the same password, their hashes will be different because each has a unique salt.</li>
+              <li><strong>Rainbow Table Resistance:</strong> Pre-computed tables become useless because the attacker would need a separate table for every possible salt value.</li>
+              <li><strong>Brute-Force Isolation:</strong> An attacker must crack each hash individually rather than attacking all hashes simultaneously.</li>
+            </ul>
+
+            <div class="callout callout--tip">
+              <strong>Best Practice:</strong> Always use a unique, cryptographically random salt for each password.
+              The salt does not need to be secret — it is typically stored alongside the hash.
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ========== F. MODERN PASSWORD STORAGE ========== -->
+      <section class="learn-section" id="modern-storage" aria-labelledby="modern-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F6E1;&#xFE0F;</span>
+            <h2 id="modern-heading">Modern Password Storage</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              Modern applications do not use simple hash functions like MD5 or SHA-256 for password storage.
+              Instead, they use specialized <strong>password hashing functions</strong> designed to be slow,
+              memory-intensive, and resistant to hardware-accelerated attacks.
+            </p>
+
+            <div class="algo-cards">
+              <div class="algo-card">
+                <h3>&#x1F3C6; Argon2id</h3>
+                <p class="algo-status"><span class="badge badge--success">Recommended</span></p>
+                <p>
+                  Winner of the 2015 Password Hashing Competition. Argon2id combines resistance to both
+                  GPU-based attacks (memory-hardness) and side-channel attacks. It allows configurable
+                  memory usage, iteration count, and parallelism.
+                </p>
+                <div class="code-block">
+                  <pre><code>$argon2id$v=19$m=65536,t=3,p=4$c2FsdHZhbHVl$hashvalue...</code></pre>
+                </div>
+              </div>
+
+              <div class="algo-card">
+                <h3>&#x1F510; scrypt</h3>
+                <p class="algo-status"><span class="badge badge--info">Strong</span></p>
+                <p>
+                  Designed by Colin Percival in 2009, scrypt is a memory-hard function that requires
+                  significant RAM to compute, making it expensive for attackers using specialized hardware
+                  (ASICs/FPGAs). Widely used in cryptocurrency and security applications.
+                </p>
+                <div class="code-block">
+                  <pre><code>scrypt(password, salt, N=2^14, r=8, p=1, dkLen=32)</code></pre>
+                </div>
+              </div>
+
+              <div class="algo-card">
+                <h3>&#x1F512; bcrypt</h3>
+                <p class="algo-status"><span class="badge badge--info">Proven</span></p>
+                <p>
+                  Based on the Blowfish cipher, bcrypt was introduced in 1999 and remains widely used.
+                  It includes a configurable cost factor that controls computation time, and it automatically
+                  generates and stores a salt with the hash.
+                </p>
+                <div class="code-block">
+                  <pre><code>$2b$12$LJ3m4ys3Lz0YqV0cXr1eKuS5/mYKpOiC3GAMbh7nPQ...</code></pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="info-table-wrapper">
+              <table class="info-table">
+                <thead>
+                  <tr>
+                    <th>Algorithm</th>
+                    <th>Memory-Hard</th>
+                    <th>GPU-Resistant</th>
+                    <th>Built-in Salt</th>
+                    <th>Recommended</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>MD5</td>
+                    <td>&#x274C;</td>
+                    <td>&#x274C;</td>
+                    <td>&#x274C;</td>
+                    <td>&#x274C;</td>
+                  </tr>
+                  <tr>
+                    <td>SHA-256</td>
+                    <td>&#x274C;</td>
+                    <td>&#x274C;</td>
+                    <td>&#x274C;</td>
+                    <td>&#x274C;</td>
+                  </tr>
+                  <tr>
+                    <td>bcrypt</td>
+                    <td>&#x274C;</td>
+                    <td>Partial</td>
+                    <td>&#x2705;</td>
+                    <td>&#x2705;</td>
+                  </tr>
+                  <tr>
+                    <td>scrypt</td>
+                    <td>&#x2705;</td>
+                    <td>&#x2705;</td>
+                    <td>&#x274C;</td>
+                    <td>&#x2705;</td>
+                  </tr>
+                  <tr>
+                    <td>Argon2id</td>
+                    <td>&#x2705;</td>
+                    <td>&#x2705;</td>
+                    <td>&#x2705;</td>
+                    <td>&#x2705; &#x1F3C6;</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ========== G. SECURITY ETHICS ========== -->
+      <section class="learn-section" id="security-ethics" aria-labelledby="ethics-heading">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x2696;&#xFE0F;</span>
+            <h2 id="ethics-heading">Security Ethics</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              Understanding security tools and techniques comes with a responsibility to use that
+              knowledge ethically and legally. This section outlines the key principles that should
+              guide your approach to cybersecurity.
+            </p>
+
+            <h3>&#x1F4DC; Authorization</h3>
+            <p>
+              Never attempt to access, analyze, or test systems without <strong>explicit written authorization</strong>
+              from the system owner. Unauthorized access to computer systems is illegal in most jurisdictions,
+              regardless of intent. Always operate within the boundaries of your authorization.
+            </p>
+
+            <h3>&#x1F4E6; Data Minimization</h3>
+            <p>
+              Only collect, process, and store the minimum amount of data necessary for your authorized
+              purpose. Avoid retaining sensitive information beyond its useful life. When working with
+              hash analysis tools, never store lookup results containing plaintext values.
+            </p>
+
+            <h3>&#x1F393; Protecting Student Data</h3>
+            <p>
+              Student credentials and personal data are protected by regulations such as FERPA (Family
+              Educational Rights and Privacy Act) and GDPR (General Data Protection Regulation). Any
+              tool that interacts with student data must comply with these regulations and institutional
+              policies.
+            </p>
+
+            <h3>&#x2705; Ethical Guidelines</h3>
+            <ul class="styled-list styled-list--objectives">
+              <li>Use security tools only for authorized, educational purposes.</li>
+              <li>Report vulnerabilities responsibly through proper disclosure channels.</li>
+              <li>Never use recovered credentials to access accounts or systems.</li>
+              <li>Respect the privacy and data rights of all individuals.</li>
+              <li>Document your activities and maintain an audit trail when performing security assessments.</li>
+              <li>Stay current with relevant laws, regulations, and institutional policies.</li>
+            </ul>
+
+            <div class="callout callout--warning">
+              <strong>Remember:</strong> The knowledge gained from this platform is intended to help you
+              understand and <em>defend against</em> security threats — not to exploit them. Ethical behavior
+              is not optional; it is the foundation of professional cybersecurity practice.
+            </div>
+          </div>
+        </article>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ========== FOOTER ========== -->
+  <footer class="site-footer" role="contentinfo">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <span class="brand-icon" aria-hidden="true">&#x1F6E1;</span>
+          <strong>Student Credentials Provider</strong>
+          <p class="footer-tagline">Educational cybersecurity demonstration</p>
+        </div>
+        <div class="footer-links">
+          <h3 class="footer-heading">Links</h3>
+          <ul>
+            <li><a href="/documentation">Documentation</a></li>
+            <li><a href="/about">About</a></li>
+            <li><a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+          </ul>
+        </div>
+        <div class="footer-privacy">
+          <h3 class="footer-heading">Privacy</h3>
+          <p>This application does not persist submitted hashes or recovered data.</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; <span id="current-year"></span> Student Credentials Provider. Built for learning.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

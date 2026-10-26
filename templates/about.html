@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About — SCP Student Credentials Provider</title>
+  <meta name="description" content="About the Student Credentials Provider educational platform">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+
+  <!-- ========== STATUS ANNOUNCER (SR-ONLY) ========== -->
+  <div id="status-announcer" role="status" aria-live="polite" class="sr-only"></div>
+
+  <!-- ========== NAVIGATION ========== -->
+  <header class="site-header" role="banner">
+    <nav class="navbar" aria-label="Primary navigation">
+      <div class="navbar-container">
+        <a href="/" class="navbar-brand" aria-label="SCP Home">
+          <span class="brand-icon" aria-hidden="true">&#x1F6E1;</span>
+          <span class="brand-text">SCP</span>
+        </a>
+
+        <button class="navbar-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav-menu" aria-label="Toggle navigation menu">
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+        </button>
+
+        <ul class="navbar-menu" id="nav-menu" role="menubar">
+          <li role="none"><a href="/" class="nav-link" role="menuitem">Home</a></li>
+          <li role="none"><a href="/#student-lookup" class="nav-link" role="menuitem">Student Lookup</a></li>
+          <li role="none"><a href="/learn" class="nav-link" role="menuitem">Learn</a></li>
+          <li role="none"><a href="/documentation" class="nav-link" role="menuitem">Documentation</a></li>
+          <li role="none"><a href="/about" class="nav-link active" role="menuitem">About</a></li>
+        </ul>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-content">
+
+    <!-- ========== PAGE HEADER ========== -->
+    <section class="page-hero" aria-labelledby="about-heading">
+      <div class="container">
+        <h1 id="about-heading" class="page-title">About Student Credentials Provider</h1>
+        <p class="page-subtitle">Understanding the purpose, scope, and educational objectives of this platform.</p>
+      </div>
+    </section>
+
+    <!-- ========== PROJECT PURPOSE ========== -->
+    <section class="about-section" aria-labelledby="purpose-heading">
+      <div class="container">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F3AF;</span>
+            <h2 id="purpose-heading">Project Purpose</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              The <strong>Student Credentials Provider (SCP)</strong> is an educational web application
+              designed to demonstrate how credential verification and lookup systems operate. It provides a safe,
+              controlled environment where students and educators can explore the mechanics of record
+              analysis without exposing real credentials or engaging with unauthorized systems.
+            </p>
+            <p>
+              By offering both a demo mode with synthetic data and an optional external provider integration,
+              SCP bridges the gap between theoretical computer science knowledge and practical,
+              hands-on understanding.
+            </p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ========== PROBLEM STATEMENT ========== -->
+    <section class="about-section" aria-labelledby="problem-heading">
+      <div class="container">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x26A0;&#xFE0F;</span>
+            <h2 id="problem-heading">Problem Statement</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              Students learning cybersecurity and software engineering often need a clear, practical demonstration
+              of how a web interface communicates with a backend and an external lookup service. Students frequently
+              encounter these concepts only in theory, without the opportunity to interact with a real system that
+              illustrates the pipeline from input submission to verified lookup result.
+            </p>
+            <p>
+              Existing tools are often designed for aggressive cracking without educational context. There is a need
+              for a transparent, well-documented platform that prioritizes responsible engineering and ethical awareness
+              alongside technical demonstration.
+            </p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ========== PROPOSED SOLUTION ========== -->
+    <section class="about-section" aria-labelledby="solution-heading">
+      <div class="container">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F4A1;</span>
+            <h2 id="solution-heading">Proposed Solution</h2>
+          </div>
+          <div class="content-card-body">
+            <p>
+              SCP provides a Flask-based web application with a clean, modern interface that allows
+              users to submit authorized test values and observe the Student Lookup process in real time.
+              The application features:
+            </p>
+            <ul class="styled-list">
+              <li>A <strong>demo mode</strong> that uses synthetic student test records to simulate the lookup process without making external API calls.</li>
+              <li>An optional <strong>live provider mode</strong> that connects to the external lookup provider for authorized queries, demonstrating real-world API integration.</li>
+              <li>Comprehensive <strong>educational content</strong> covering cryptographic functions, algorithm comparisons, and security best practices.</li>
+              <li>A fully <strong>documented codebase</strong> with clear architecture explanations, making it suitable for academic study and code review.</li>
+            </ul>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ========== PROJECT OBJECTIVES ========== -->
+    <section class="about-section" aria-labelledby="objectives-heading">
+      <div class="container">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x2705;</span>
+            <h2 id="objectives-heading">Project Objectives</h2>
+          </div>
+          <div class="content-card-body">
+            <ul class="styled-list styled-list--objectives">
+              <li>Demonstrate the end-to-end process of Student Record Lookup in a transparent, educational context.</li>
+              <li>Provide a safe sandbox environment using synthetic student test data for risk-free exploration.</li>
+              <li>Illustrate best practices for API integration, input validation, and error handling in a Flask application.</li>
+              <li>Teach the fundamental differences between hashing, encryption, and encoding through interactive content.</li>
+              <li>Promote responsible use and ethical awareness in cybersecurity education.</li>
+              <li>Deliver a well-structured, testable codebase that serves as a reference implementation for university students.</li>
+              <li>Support multiple verification algorithms (MD5, SHA-1, SHA-256, SHA-384, SHA-512, NTLM) for comparative learning.</li>
+              <li>Ensure accessibility compliance with proper semantic HTML, ARIA attributes, and keyboard navigation.</li>
+            </ul>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ========== SCOPE & LIMITATIONS ========== -->
+    <section class="about-section" aria-labelledby="scope-heading">
+      <div class="container">
+        <article class="content-card">
+          <div class="content-card-header">
+            <span class="card-icon" aria-hidden="true">&#x1F4CB;</span>
+            <h2 id="scope-heading">Scope &amp; Limitations</h2>
+          </div>
+          <div class="content-card-body">
+            <h3>In Scope</h3>
+            <ul class="styled-list">
+              <li>Educational Student Lookup via a responsive web-based interface.</li>
+              <li>Demo mode with synthetic pre-configured record mappings.</li>
+              <li>Optional live integration with the external verification provider API.</li>
+              <li>Support for MD5, SHA-1, SHA-256, SHA-384, SHA-512, and NTLM algorithms.</li>
+              <li>Comprehensive documentation and educational content.</li>
+              <li>Server-side validation and security best practices demonstration.</li>
+            </ul>
+
+            <h3>Out of Scope</h3>
+            <ul class="styled-list">
+              <li>Bulk credential harvesting or automated password attacks.</li>
+              <li>Storage or logging of submitted lookup inputs or results.</li>
+              <li>User authentication or institutional student account management.</li>
+              <li>Processing or retrieving real student private passwords or personal records.</li>
+              <li>Deployment to production or public-facing enterprise environments.</li>
+              <li>Integration with persistent databases for query retention.</li>
+            </ul>
+
+            <h3>Limitations</h3>
+            <ul class="styled-list">
+              <li>Live API mode requires a valid external provider API key and email.</li>
+              <li>API lookups are subject to provider rate limits and service availability.</li>
+              <li>The application is designed for local development and educational use only.</li>
+              <li>Demo mode results are deterministic and limited to pre-configured synthetic student records.</li>
+            </ul>
+          </div>
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ========== FOOTER ========== -->
+  <footer class="site-footer" role="contentinfo">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <span class="brand-icon" aria-hidden="true">&#x1F6E1;</span>
+          <strong>Student Credentials Provider</strong>
+          <p class="footer-tagline">Educational cybersecurity demonstration</p>
+        </div>
+        <div class="footer-links">
+          <h3 class="footer-heading">Links</h3>
+          <ul>
+            <li><a href="/documentation">Documentation</a></li>
+            <li><a href="/about">About</a></li>
+            <li><a href="/learn">Learn</a></li>
+          </ul>
+        </div>
+        <div class="footer-privacy">
+          <h3 class="footer-heading">Privacy</h3>
+          <p>This application does not persist submitted lookup inputs or recovered records.</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; <span id="current-year"></span> Student Credentials Provider. Built for learning.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

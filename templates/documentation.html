@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentation — SCP Student Credentials Provider</title>
+  <meta name="description" content="Technical and architectural documentation for the Student Credentials Provider platform">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+</head>
+<body>
+
+  <!-- ========== STATUS ANNOUNCER (SR-ONLY) ========== -->
+  <div id="status-announcer" role="status" aria-live="polite" class="sr-only"></div>
+
+  <!-- ========== NAVIGATION ========== -->
+  <header class="site-header" role="banner">
+    <nav class="navbar" aria-label="Primary navigation">
+      <div class="navbar-container">
+        <a href="/" class="navbar-brand" aria-label="SCP Home">
+          <span class="brand-icon" aria-hidden="true">&#x1F6E1;</span>
+          <span class="brand-text">SCP</span>
+        </a>
+
+        <button class="navbar-toggle" id="nav-toggle" aria-expanded="false" aria-controls="nav-menu" aria-label="Toggle navigation menu">
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+          <span class="hamburger-line"></span>
+        </button>
+
+        <ul class="navbar-menu" id="nav-menu" role="menubar">
+          <li role="none"><a href="/" class="nav-link" role="menuitem">Home</a></li>
+          <li role="none"><a href="/#student-lookup" class="nav-link" role="menuitem">Student Lookup</a></li>
+          <li role="none"><a href="/learn" class="nav-link" role="menuitem">Learn</a></li>
+          <li role="none"><a href="/documentation" class="nav-link active" role="menuitem">Documentation</a></li>
+          <li role="none"><a href="/about" class="nav-link" role="menuitem">About</a></li>
+        </ul>
+      </div>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-content">
+
+    <!-- ========== PAGE HEADER ========== -->
+    <section class="page-hero" aria-labelledby="doc-heading">
+      <div class="container">
+        <h1 id="doc-heading" class="page-title">Platform Documentation</h1>
+        <p class="page-subtitle">Comprehensive technical guide to architecture, API interfaces, configuration, and security practices.</p>
+      </div>
+    </section>
+
+    <!-- ========== DOCUMENTATION LAYOUT ========== -->
+    <section class="doc-container container" aria-label="Documentation sections">
+      <div class="doc-layout">
+
+        <!-- Sticky Table of Contents Sidebar -->
+        <aside class="doc-sidebar" aria-label="Table of contents">
+          <nav class="doc-nav">
+            <h2 class="doc-nav-title">On This Page</h2>
+            <ul class="doc-nav-list">
+              <li><a href="#overview" class="doc-nav-link">1. Project Overview</a></li>
+              <li><a href="#requirements" class="doc-nav-link">2. System Requirements</a></li>
+              <li><a href="#installation" class="doc-nav-link">3. Installation</a></li>
+              <li><a href="#configuration" class="doc-nav-link">4. Environment Configuration</a></li>
+              <li><a href="#running-app" class="doc-nav-link">5. Running Application</a></li>
+              <li><a href="#running-tests" class="doc-nav-link">6. Running Tests</a></li>
+              <li><a href="#architecture" class="doc-nav-link">7. System Architecture</a></li>
+              <li><a href="#workflow" class="doc-nav-link">8. Process Workflow</a></li>
+              <li><a href="#api-reference" class="doc-nav-link">9. API Reference</a></li>
+              <li><a href="#demo-mode" class="doc-nav-link">10. Demo Mode Guide</a></li>
+              <li><a href="#live-mode" class="doc-nav-link">11. Live Provider Mode</a></li>
+              <li><a href="#troubleshooting" class="doc-nav-link">12. Troubleshooting</a></li>
+              <li><a href="#security" class="doc-nav-link">13. Security Considerations</a></li>
+            </ul>
+          </nav>
+        </aside>
+
+        <!-- Main Documentation Content -->
+        <article class="doc-content">
+
+          <!-- Section 1: Overview -->
+          <section id="overview" class="doc-section card">
+            <h2 class="section-title">1. Project Overview</h2>
+            <p>
+              The <strong>Student Credentials Provider (SCP)</strong> is a production-grade educational web application engineered to teach core cybersecurity and software engineering principles:
+            </p>
+            <ul class="styled-list">
+              <li>Cryptographic digest characteristics versus mathematical two-way encryption.</li>
+              <li>Lookup database mechanisms (pre-computed rainbow tables and search indexes).</li>
+              <li>Secure client-server communication using RESTful JSON endpoints.</li>
+              <li>Resilient third-party API integration with rate limiting, timeouts, and credential isolation.</li>
+              <li>Defensive web programming techniques including strict server-side validation and security headers.</li>
+            </ul>
+            <div class="note-box info">
+              <strong>Core Educational Tenet:</strong> A student record lookup does <em>not</em> reverse a cryptographic one-way mathematical function; it performs an exact search across pre-computed database indexes.
+            </div>
+          </section>
+
+          <!-- Section 2: Requirements -->
+          <section id="requirements" class="doc-section card">
+            <h2 class="section-title">2. System Requirements</h2>
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Specification</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Runtime</td>
+                    <td>Python 3.11+ (tested on Python 3.11, 3.12, 3.13)</td>
+                    <td>Standard CPython distribution</td>
+                  </tr>
+                  <tr>
+                    <td>Web Framework</td>
+                    <td>Flask 3.1.x, Werkzeug 3.1.x</td>
+                    <td>WSGI micro-framework</td>
+                  </tr>
+                  <tr>
+                    <td>HTTP Client</td>
+                    <td>Requests 2.32+</td>
+                    <td>With HTTPS connection pooling and timeout support</td>
+                  </tr>
+                  <tr>
+                    <td>Client Browser</td>
+                    <td>Modern Evergreen Browser (Chrome, Firefox, Edge, Safari)</td>
+                    <td>ES6+ JavaScript and CSS Grid / Flexbox support required</td>
+                  </tr>
+                  <tr>
+                    <td>Operating System</td>
+                    <td>Cross-platform (Windows 10/11, macOS, Linux)</td>
+                    <td>POSIX and Windows PowerShell compatible</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- Section 3: Installation -->
+          <section id="installation" class="doc-section card">
+            <h2 class="section-title">3. Installation Instructions</h2>
+            <p>Follow these steps to set up the development environment from scratch:</p>
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>PowerShell / Bash</span></div>
+              <pre><code># 1. Navigate to the repository directory
+cd "student-credentials-provider"
+
+# 2. Create a Python virtual environment
+python -m venv .venv
+
+# 3. Activate the virtual environment
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# Linux / macOS:
+source .venv/bin/activate
+
+# 4. Install all runtime and testing dependencies
+python -m pip install -r requirements.txt</code></pre>
+            </div>
+          </section>
+
+          <!-- Section 4: Configuration -->
+          <section id="configuration" class="doc-section card">
+            <h2 class="section-title">4. Environment Configuration</h2>
+            <p>
+              Configuration is managed via environment variables using <code>python-dotenv</code>. 
+              Copy the provided <code>.env.example</code> to <code>.env</code> in the project root:
+            </p>
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>.env Configuration</span></div>
+              <pre><code># Student Lookup Operating Mode: 'demo' (default) or 'live'
+STUDENT_LOOKUP_MODE=demo
+
+# External Provider Credentials (required only for live mode)
+# Format: email:api_code as registered on md5decrypt.net
+MD5DECRYPT_API_KEY=your_email@domain.com:your_api_code
+
+# External request timeout in seconds
+STUDENT_LOOKUP_TIMEOUT_SECONDS=10
+
+# Per-client in-memory rate limiting (requests per minute)
+RATE_LIMIT_PER_MINUTE=30
+
+# Flask Security Key
+SECRET_KEY=generate_a_random_32_byte_hex_string</code></pre>
+            </div>
+            <div class="note-box warning">
+              <strong>Security Rule:</strong> The <code>.env</code> file is explicitly ignored in <code>.gitignore</code>. Never commit API keys or sensitive credentials to version control.
+            </div>
+          </section>
+
+          <!-- Section 5: Running the App -->
+          <section id="running-app" class="doc-section card">
+            <h2 class="section-title">5. Running the Application</h2>
+            <p>Start the Flask development server on the default port (5000):</p>
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>Command Line</span></div>
+              <pre><code>python app.py</code></pre>
+            </div>
+            <p>Open your browser and navigate to:</p>
+            <div class="code-block-wrapper">
+              <pre><code>http://127.0.0.1:5000/</code></pre>
+            </div>
+          </section>
+
+          <!-- Section 6: Running Tests -->
+          <section id="running-tests" class="doc-section card">
+            <h2 class="section-title">6. Running Automated Tests</h2>
+            <p>The automated test suite uses <code>pytest</code> to verify route behaviors, input validation routines, API client interactions, security headers, and secret isolation without making live network calls:</p>
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>Run Pytest Suite</span></div>
+              <pre><code># Run all 51 tests with verbose output
+python -m pytest -v
+
+# Run a specific test module
+python -m pytest tests/test_validation.py -v
+python -m pytest tests/test_api_client.py -v
+python -m pytest tests/test_app.py -v</code></pre>
+            </div>
+          </section>
+
+          <!-- Section 7: System Architecture -->
+          <section id="architecture" class="doc-section card">
+            <h2 class="section-title">7. System Architecture</h2>
+            <p>The application adheres to a clean layered architecture with complete separation of concerns:</p>
+            
+            <div class="architecture-diagram" aria-label="Architecture Diagram">
+              <div class="arch-box client-box">
+                <div class="arch-title">Client Layer</div>
+                <div class="arch-desc">Vanilla JS (ES6+) &amp; Modern Semantic HTML5 UI</div>
+              </div>
+              <div class="arch-arrow"><span>&#x2193;</span> JSON POST /api/student-lookup</div>
+              <div class="arch-box app-box">
+                <div class="arch-title">Flask Application &amp; Middleware</div>
+                <div class="arch-desc">Rate Limiting, JSON Verification, Security Headers</div>
+              </div>
+              <div class="arch-arrow"><span>&#x2193;</span> Validated Parameters</div>
+              <div class="arch-box service-box">
+                <div class="arch-title">Student Lookup Service</div>
+                <div class="arch-desc">Length / Hex Verification, Mode Routing (Demo vs. Live)</div>
+              </div>
+              <div class="arch-branch">
+                <div class="branch-left">
+                  <div class="arch-arrow"><span>&#x2199;</span> Mode = Demo</div>
+                  <div class="arch-box storage-box">
+                    <div class="arch-title">Synthetic Dataset</div>
+                    <div class="arch-desc">Local In-Memory Student Records</div>
+                  </div>
+                </div>
+                <div class="branch-right">
+                  <div class="arch-arrow"><span>&#x2198;</span> Mode = Live</div>
+                  <div class="arch-box external-box">
+                    <div class="arch-title">External Provider Adapter</div>
+                    <div class="arch-desc">HTTPS GET, Sanitized Protocol Isolation</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Section 8: Workflow -->
+          <section id="workflow" class="doc-section card">
+            <h2 class="section-title">8. Four-Step Process Workflow</h2>
+            <div class="workflow-steps">
+              <div class="workflow-step">
+                <div class="step-badge">01</div>
+                <div class="step-content">
+                  <h3>Submit</h3>
+                  <p>The user provides a hexadecimal lookup input and selects the corresponding algorithm from the interactive Student Lookup interface.</p>
+                </div>
+              </div>
+              <div class="workflow-step">
+                <div class="step-badge">02</div>
+                <div class="step-content">
+                  <h3>Validate</h3>
+                  <p>The client performs pre-flight checks, and the server validates digest length, character bounds (hex 0-9, a-f), and algorithm compatibility.</p>
+                </div>
+              </div>
+              <div class="workflow-step">
+                <div class="step-badge">03</div>
+                <div class="step-content">
+                  <h3>Query</h3>
+                  <p>The server routes the query either to the local synthetic dataset (demo mode) or securely queries the external database provider over HTTPS.</p>
+                </div>
+              </div>
+              <div class="workflow-step">
+                <div class="step-badge">04</div>
+                <div class="step-content">
+                  <h3>Interpret</h3>
+                  <p>The normalized response is structured and displayed with an educational explanation emphasizing the database search paradigm.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Section 9: API Reference -->
+          <section id="api-reference" class="doc-section card">
+            <h2 class="section-title">9. API Reference</h2>
+            <p>The backend exposes RESTful JSON endpoints:</p>
+
+            <h3>POST /api/student-lookup</h3>
+            <p>Performs a student record lookup according to the active configuration mode.</p>
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>Request Payload (JSON)</span></div>
+              <pre><code>{
+  "lookup_input": "5d41402abc4b2a76b9719d911017c592",
+  "algorithm_type": "md5"
+}</code></pre>
+            </div>
+
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>Success Response (HTTP 200)</span></div>
+              <pre><code>{
+  "success": true,
+  "found": true,
+  "status": "match_found",
+  "lookup_input": "5d41402abc4b2a76b9719d911017c592",
+  "algorithm": "md5",
+  "plaintext": "hello",
+  "mode": "demo",
+  "duration": 0.0002,
+  "message": "A matching entry was returned."
+}</code></pre>
+            </div>
+
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>Not Found Response (HTTP 200)</span></div>
+              <pre><code>{
+  "success": true,
+  "found": false,
+  "status": "not_found",
+  "lookup_input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "algorithm": "md5",
+  "plaintext": null,
+  "mode": "demo",
+  "duration": 0.0001,
+  "message": "No matching entry was returned by the lookup service."
+}</code></pre>
+            </div>
+
+            <div class="code-block-wrapper">
+              <div class="code-header"><span>Validation Error Response (HTTP 400)</span></div>
+              <pre><code>{
+  "success": false,
+  "status": "invalid_input",
+  "error": "Invalid length for md5. Expected 32 characters, got 6.",
+  "message": "Please provide a valid lookup value and supported algorithm."
+}</code></pre>
+            </div>
+
+            <h3>POST /api/demo-student-lookup</h3>
+            <p>Explicitly routes to the synthetic demo dataset, even if the server is configured in live mode. Never contacts the external network.</p>
+
+            <h3>GET /api/health</h3>
+            <p>Returns health check telemetry without exposing secrets or credentials.</p>
+            <div class="code-block-wrapper">
+              <pre><code>{
+  "status": "healthy",
+  "mode": "demo",
+  "service": "Student Credentials Provider",
+  "version": "1.0.0"
+}</code></pre>
+            </div>
+          </section>
+
+          <!-- Section 10: Demo Mode -->
+          <section id="demo-mode" class="doc-section card">
+            <h2 class="section-title">10. Demo Mode Guide &amp; Test Records</h2>
+            <p>
+              Demo mode operates completely offline using synthetic student records. Use these authorized sample test values for testing and demonstrations:
+            </p>
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Algorithm</th>
+                    <th>Lookup Input (Hex)</th>
+                    <th>Plaintext Record</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>md5</code></td>
+                    <td><code>5d41402abc4b2a76b9719d911017c592</code></td>
+                    <td>hello</td>
+                    <td><span class="badge success">Match Found</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>md5</code></td>
+                    <td><code>098f6bcd4621d373cade4e832627b4f6</code></td>
+                    <td>test</td>
+                    <td><span class="badge success">Match Found</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>sha1</code></td>
+                    <td><code>aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d</code></td>
+                    <td>hello</td>
+                    <td><span class="badge success">Match Found</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>sha256</code></td>
+                    <td><code>5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8</code></td>
+                    <td>password</td>
+                    <td><span class="badge success">Match Found</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>sha256</code></td>
+                    <td><code>a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3</code></td>
+                    <td>123</td>
+                    <td><span class="badge success">Match Found</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>sha512</code></td>
+                    <td><code>b109f3bbbc244eb82441917ed06d618b9008dd09b3befd1b5e07394c706a8bb980b1d7785e5976ec049b46df5f1326af5a2ea6d103fd07c95385ffab0cacbc86</code></td>
+                    <td>password</td>
+                    <td><span class="badge success">Match Found</span></td>
+                  </tr>
+                  <tr>
+                    <td><code>md5</code></td>
+                    <td><code>ffffffffffffffffffffffffffffffff</code></td>
+                    <td>None (unindexed)</td>
+                    <td><span class="badge warning">No Match</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- Section 11: Live API Mode -->
+          <section id="live-mode" class="doc-section card">
+            <h2 class="section-title">11. Live Provider Mode Guide</h2>
+            <p>
+              To query the live external verification database:
+            </p>
+            <ol class="styled-list">
+              <li>Register an account on <a href="https://md5decrypt.net/en/Api/" target="_blank" rel="noopener noreferrer">md5decrypt.net</a>.</li>
+              <li>Retrieve your registered email and API key code.</li>
+              <li>Set <code>STUDENT_LOOKUP_MODE=live</code> in your <code>.env</code> file.</li>
+              <li>Set <code>MD5DECRYPT_API_KEY=your_email:your_code</code>.</li>
+              <li>Restart the Flask server. The interface will switch from the purple DEMO banner to the cyan LIVE indicator.</li>
+            </ol>
+            <div class="note-box caution">
+              <strong>Fail-Safe Principle:</strong> If live provider mode encounters an authentication failure, network timeout, or service error, the platform reports the exact live error state. It <em>never</em> silently falls back to demo mode.
+            </div>
+          </section>
+
+          <!-- Section 12: Troubleshooting -->
+          <section id="troubleshooting" class="doc-section card">
+            <h2 class="section-title">12. Troubleshooting</h2>
+            <div class="faq-list">
+              <div class="faq-item">
+                <h3 class="faq-question">&#x2753; ModuleNotFoundError: No module named 'flask'</h3>
+                <p class="faq-answer">Ensure your virtual environment is activated and dependencies installed: <code>python -m pip install -r requirements.txt</code>.</p>
+              </div>
+              <div class="faq-item">
+                <h3 class="faq-question">&#x2753; HTTP 429 Too Many Requests</h3>
+                <p class="faq-answer">You have exceeded the configured <code>RATE_LIMIT_PER_MINUTE</code>. Wait 60 seconds or increase the limit in <code>.env</code> for local benchmarking.</p>
+              </div>
+              <div class="faq-item">
+                <h3 class="faq-question">&#x2753; Live Provider returns Authentication Error</h3>
+                <p class="faq-answer">Verify your <code>MD5DECRYPT_API_KEY</code> variable contains both your registered email and code separated by a colon (<code>email:code</code>) without spaces.</p>
+              </div>
+              <div class="faq-item">
+                <h3 class="faq-question">&#x2753; Request Timeout</h3>
+                <p class="faq-answer">The external service took longer than <code>STUDENT_LOOKUP_TIMEOUT_SECONDS</code> to respond. Check internet connectivity or firewall rules.</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- Section 13: Security Considerations -->
+          <section id="security" class="doc-section card">
+            <h2 class="section-title">13. Security Considerations</h2>
+            <ul class="styled-list">
+              <li><strong>Zero Credential Persistence:</strong> Submitted lookup inputs and plaintext records are processed strictly in volatile memory. No disk persistence, database writes, or cache persistence occur.</li>
+              <li><strong>Sanitized Diagnostics:</strong> Exception handling routines strip API keys, auth headers, and internal stack traces before responses leave the backend.</li>
+              <li><strong>Defensive Headers:</strong> The server attaches <code>Content-Security-Policy</code>, <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, and <code>Referrer-Policy: strict-origin-when-cross-origin</code>.</li>
+              <li><strong>DOM Injection Protection:</strong> Frontend code uses strict <code>textContent</code> and DOM node construction rather than raw <code>innerHTML</code> injection for untrusted inputs.</li>
+            </ul>
+          </section>
+
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ========== FOOTER ========== -->
+  <footer class="site-footer" role="contentinfo">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <span class="brand-icon" aria-hidden="true">&#x1F6E1;</span>
+          <strong>Student Credentials Provider</strong>
+          <p class="footer-tagline">Educational cybersecurity demonstration</p>
+        </div>
+        <div class="footer-links">
+          <h3 class="footer-heading">Links</h3>
+          <ul>
+            <li><a href="/documentation">Documentation</a></li>
+            <li><a href="/about">About</a></li>
+            <li><a href="/learn">Learn</a></li>
+          </ul>
+        </div>
+        <div class="footer-privacy">
+          <h3 class="footer-heading">Privacy</h3>
+          <p>This application does not persist submitted lookup inputs or recovered records.</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; <span id="current-year"></span> Student Credentials Provider. Built for learning.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
