@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login — Student Credentials Provider</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .login-container {
+      width: 100%;
+      max-width: 380px;
+      margin: auto;
+      text-align: center;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 18px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+    }
+    .back-link:hover {
+      color: var(--text-main);
+      text-decoration: underline;
+    }
+    .error-banner {
+      background-color: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: var(--error-text);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="login-container">
+    <h1 class="title">Admin Login</h1>
+
+    {% if error %}
+    <div class="error-banner" role="alert">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="/admin/login" class="lookup-form">
+      <div class="field-group">
+        <label for="username" class="sr-only">Username</label>
+        <input
+          type="text"
+          id="username"
+          name="username"
+          class="lookup-input"
+          placeholder="Username"
+          required
+          autofocus
+          autocomplete="username"
+        >
+      </div>
+
+      <div class="field-group">
+        <label for="password" class="sr-only">Password</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          class="lookup-input"
+          placeholder="Password"
+          required
+          autocomplete="current-password"
+        >
+      </div>
+
+      <button type="submit" class="submit-btn">
+        Log In
+      </button>
+    </form>
+
+    <a href="/" class="back-link">&larr; Back to Lookup</a>
+  </main>
+</body>
+</html>

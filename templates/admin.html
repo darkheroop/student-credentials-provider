@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>API Management — Student Credentials Provider</title>
+  <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+  <div class="admin-wrapper">
+    <!-- Header -->
+    <header class="admin-header">
+      <div class="header-left">
+        <h1 class="header-title">Student Credentials Provider</h1>
+        <span class="header-badge">API Management</span>
+      </div>
+      <div class="header-right">
+        <a href="/" class="btn-link">&larr; Main Lookup</a>
+        <a href="/admin/logout" class="btn-link btn-logout">Log Out</a>
+      </div>
+    </header>
+
+    <!-- Notification Banner -->
+    <div id="alertBox" class="alert-box hidden" role="status" aria-live="polite"></div>
+
+    <!-- Metrics Summary -->
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <span class="metric-label">Total APIs</span>
+        <span class="metric-value" id="metricTotal">0</span>
+      </div>
+      <div class="metric-card metric-card--active">
+        <span class="metric-label">Active & Ready</span>
+        <span class="metric-value" id="metricActive">0</span>
+      </div>
+      <div class="metric-card metric-card--paused">
+        <span class="metric-label">Paused / Quota Exhausted</span>
+        <span class="metric-value" id="metricPaused">0</span>
+      </div>
+      <div class="metric-card metric-card--disabled">
+        <span class="metric-label">Disabled</span>
+        <span class="metric-value" id="metricDisabled">0</span>
+      </div>
+    </section>
+
+    <!-- Main Content Grid -->
+    <main class="admin-grid">
+      <!-- Add / Edit Form Card -->
+      <section class="admin-card form-card">
+        <h2 class="card-title" id="formTitle">Add API Configuration</h2>
+        <form id="apiForm" class="admin-form" novalidate>
+          <input type="hidden" id="formMode" value="create">
+          <input type="hidden" id="formConfigId" value="">
+
+          <div class="form-group">
+            <label for="displayName" class="form-label">Display Name *</label>
+            <input
+              type="text"
+              id="displayName"
+              class="form-input"
+              placeholder="e.g. MD5Decrypt Secondary"
+              required
+            >
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="providerName" class="form-label">Provider *</label>
+              <select id="providerName" class="form-input">
+                <option value="md5decrypt">MD5Decrypt</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="priority" class="form-label">Priority (Lower = Higher)</label>
+              <input
+                type="number"
+                id="priority"
+                class="form-input"
+                value="10"
+                min="1"
+                max="100"
+              >
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="endpoint" class="form-label">Endpoint URL *</label>
+            <input
+              type="url"
+              id="endpoint"
+              class="form-input"
+              value="https://api.md5decrypt.net/"
+              required
+            >
+          </div>
+
+          <div class="form-group">
+            <label for="credential" class="form-label" id="credentialLabel">API Key / Credential *</label>
+            <input
+              type="password"
+              id="credential"
+              class="form-input"
+              placeholder="Paste provider API key"
+              autocomplete="new-password"
+            >
+            <small class="form-hint" id="credentialHint">
+              Key is encrypted at rest using HMAC-SHA256 authenticated encryption.
+            </small>
+          </div>
+
+          <div class="form-group">
+            <label for="notes" class="form-label">Notes (Optional)</label>
+            <input
+              type="text"
+              id="notes"
+              class="form-input"
+              placeholder="e.g. Account quota resets at 00:00 UTC"
+            >
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="saveBtn" class="btn btn-primary">
+              Save Configuration
+            </button>
+            <button type="button" id="cancelEditBtn" class="btn btn-secondary hidden">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Configured APIs List -->
+      <section class="admin-card list-card">
+        <div class="list-header">
+          <h2 class="card-title">Configured Providers</h2>
+          <button id="refreshBtn" class="btn btn-sm btn-outline">Refresh</button>
+        </div>
+
+        <div id="configsList" class="configs-list">
+          <p class="empty-state">Loading configured API providers...</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

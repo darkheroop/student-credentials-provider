@@ -41,8 +41,22 @@ class Config:
     # ── Rate limiting ───────────────────────────────────────────────────
     RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
 
-    # ── Flask secrets ───────────────────────────────────────────────────
+    # ── Security & Admin ────────────────────────────────────────────────
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-change-me")
+    API_ENCRYPTION_KEY: str = os.getenv(
+        "API_ENCRYPTION_KEY", "scp-encryption-secret-key-32chars!"
+    )
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "admin123")
+
+    # ── Database & Failover ─────────────────────────────────────────────
+    BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
+    DATABASE_PATH: str = os.getenv(
+        "DATABASE_PATH",
+        os.path.join("/tmp", "scp.db") if os.getenv("VERCEL") else os.path.join(BASE_DIR, "scp.db"),
+    )
+    MAX_FAILOVER_ATTEMPTS: int = int(os.getenv("MAX_FAILOVER_ATTEMPTS", "5"))
+    DEFAULT_PAUSE_DURATION_MINUTES: int = int(os.getenv("DEFAULT_PAUSE_DURATION_MINUTES", "60"))
 
     # ── Supported hash algorithms ───────────────────────────────────────
     # Maps algorithm name → expected hex-digest length (in characters).

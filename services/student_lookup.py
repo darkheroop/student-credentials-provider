@@ -59,7 +59,13 @@ class StudentLookupService:
 
     _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
-    def __init__(self, config) -> None:
+    def __init__(
+        self,
+        config,
+        db=None,
+        crypto=None,
+        failover=None,
+    ) -> None:
         """
         Initialise the Student Lookup service.
 
@@ -67,9 +73,18 @@ class StudentLookupService:
         ----------
         config : Config
             Application configuration object.
+        db : Database, optional
+            Database instance for API configurations.
+        crypto : CredentialCrypto, optional
+            Crypto helper.
+        failover : ApiFailoverCoordinator, optional
+            Failover coordinator for multi-provider dispatch.
         """
         self.config = config
         self.client: Md5DecryptClient | None = None
+        self.db = db
+        self.crypto = crypto
+        self.failover = failover
 
         if config.is_live_mode:
             self.client = Md5DecryptClient(
@@ -215,7 +230,29 @@ class StudentLookupService:
     # ── Live Mode Execution ─────────────────────────────────────────────
 
     def _live_student_lookup(self, lookup_input: str, algorithm_type: str) -> dict:
-        """Forward the lookup request to the external provider."""
+        """Forward the lookup request to the failover coordinator or client."""
+        # Use failover coordinator if configured and eligible providers exist
+        if self.failover is not None:
+            eligible = self.db.get_eligible_configs() if self.db else []
+            if eligible:
+                return self.failover.execute_lookup(lookup_input, algorithm_type)
+
+        if self.client is None:
+            return {
+                "success": False,
+                "status": "service_unavailable",
+                "found": False,
+                "lookup_input": lookup_input,
+                "hash": lookup_input,
+                "algorithm": algorithm_type,
+                "algorithm_type": algorithm_type,
+                "plaintext": None,
+                "mode": "live",
+                "message": "No live lookup client or provider is configured.",
+                "error": "No live lookup client is configured.",
+                "duration": 0.0,
+            }
+
         result = self.client.lookup(lookup_input=lookup_input, algorithm_type=algorithm_type)
 
         if result["success"]:

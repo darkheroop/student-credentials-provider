@@ -64,6 +64,31 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+.settings-link {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 8px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition), background-color var(--transition);
+}
+
+.settings-link:hover {
+  color: var(--text-main);
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.settings-link:focus-visible {
+  outline: 2px solid var(--btn-hover);
+  outline-offset: 2px;
+}
+
 .container {
   width: 100%;
   max-width: 440px;

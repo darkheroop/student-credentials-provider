@@ -14,7 +14,11 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
 from config import Config
+from database import Database
+from services.crypto import CredentialCrypto
+from services.failover import ApiFailoverCoordinator
 from services.student_lookup import StudentLookupService, HashLookupService
+from admin_routes import init_admin_bp
 
 # ── Application factory ────────────────────────────────────────────────
 
@@ -27,6 +31,23 @@ config = Config()
 app.secret_key = config.SECRET_KEY
 
 CORS(app)
+
+# ── Database & Dynamic Failover Services ───────────────────────────────
+
+db = Database(config=config)
+crypto = CredentialCrypto(secret_key=config.API_ENCRYPTION_KEY)
+db.seed_default_if_empty(crypto)
+
+failover_coordinator = ApiFailoverCoordinator(db=db, crypto=crypto, config=config)
+student_lookup_service = StudentLookupService(
+    config=config,
+    db=db,
+    crypto=crypto,
+    failover=failover_coordinator,
+)
+hash_lookup_service = student_lookup_service  # Backward compatibility alias
+
+app.register_blueprint(init_admin_bp(db=db, crypto=crypto, config=config))
 
 
 class VercelPathFixMiddleware:
@@ -75,9 +96,6 @@ class VercelPathFixMiddleware:
 
 # Wrap Flask's wsgi_app with the path normalization middleware
 app.wsgi_app = VercelPathFixMiddleware(app.wsgi_app)
-
-student_lookup_service = StudentLookupService(config)
-hash_lookup_service = student_lookup_service  # Backward compatibility alias
 
 # ── In-memory rate limiter ──────────────────────────────────────────────
 

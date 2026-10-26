@@ -16,3 +16,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 node_modules/
+*.db
+*.sqlite
+*.sqlite3
