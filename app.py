@@ -8,6 +8,7 @@ via the Student Lookup Service (supporting both offline demo and live external p
 import os
 import time
 from functools import wraps
+from urllib.parse import parse_qs, urlencode
 
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
@@ -26,6 +27,54 @@ config = Config()
 app.secret_key = config.SECRET_KEY
 
 CORS(app)
+
+
+class VercelPathFixMiddleware:
+    """
+    WSGI middleware that normalizes PATH_INFO and SCRIPT_NAME on Vercel.
+
+    When Vercel rewrites requests to /api/index?__path=$1, the captured path
+    is stored in the __path query parameter. This middleware reconstructs
+    the clean client-intended PATH_INFO and removes __path from QUERY_STRING.
+    """
+
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        qs_raw = environ.get("QUERY_STRING", "")
+        if "__path=" in qs_raw or qs_raw.startswith("__path"):
+            qs = parse_qs(qs_raw, keep_blank_values=True)
+            if "__path" in qs:
+                captured = qs.pop("__path")[0]
+                environ["PATH_INFO"] = "/" + captured.lstrip("/")
+                environ["QUERY_STRING"] = urlencode(qs, doseq=True)
+                environ["SCRIPT_NAME"] = ""
+        else:
+            # Fallback for direct invocations or legacy rewrites
+            matched_path = environ.get("HTTP_X_MATCHED_PATH")
+            path_info = environ.get("PATH_INFO", "")
+
+            if matched_path and not matched_path.startswith(("/api/index", "/api/index.py")):
+                clean_path = matched_path.split("?")[0]
+                environ["PATH_INFO"] = clean_path if clean_path else "/"
+                environ["SCRIPT_NAME"] = ""
+            elif path_info.startswith(("/api/index.py", "/api/index")):
+                for prefix in ("/api/index.py", "/api/index"):
+                    if path_info.startswith(prefix):
+                        clean_path = path_info[len(prefix):]
+                        environ["PATH_INFO"] = clean_path if clean_path else "/"
+                        environ["SCRIPT_NAME"] = ""
+                        break
+
+        if not environ.get("PATH_INFO"):
+            environ["PATH_INFO"] = "/"
+
+        return self.wsgi_app(environ, start_response)
+
+
+# Wrap Flask's wsgi_app with the path normalization middleware
+app.wsgi_app = VercelPathFixMiddleware(app.wsgi_app)
 
 student_lookup_service = StudentLookupService(config)
 hash_lookup_service = student_lookup_service  # Backward compatibility alias
@@ -85,8 +134,6 @@ def set_security_headers(response):
         "img-src 'self' data:; "
         "connect-src 'self'"
     )
-    response.headers["X-Flask-Path"] = request.path
-    response.headers["X-Flask-QS"] = request.environ.get("QUERY_STRING", "")
     return response
 
 
