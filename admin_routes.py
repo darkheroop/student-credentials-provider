@@ -236,6 +236,7 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
 
             results.append({
                 "id": c["id"],
+                "owner_id": c.get("owner_id"),
                 "provider_name": c["provider_name"],
                 "display_name": c["display_name"],
                 "endpoint": c["endpoint"],
@@ -249,6 +250,8 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
                 "last_error_category": c["last_error_category"],
                 "last_failure_reason": c.get("last_failure_reason", ""),
                 "consecutive_failures": c.get("consecutive_failures", 0),
+                "total_requests": c.get("total_requests", 0),
+                "total_successes": c.get("total_successes", 0),
                 "notes": c["notes"],
                 "created_at": c["created_at"],
                 "updated_at": c["updated_at"],
@@ -270,6 +273,7 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         priority = data.get("priority", 10)
         enabled = bool(data.get("enabled", True))
         notes = (data.get("notes") or "").strip()
+        user_id = session.get("user_id")
 
         if not display_name:
             return jsonify({"success": False, "error": "Display name is required."}), 400
@@ -300,6 +304,7 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
             priority=priority_int,
             enabled=1 if enabled else 0,
             notes=notes,
+            owner_id=user_id,
         )
 
         db.record_event(new_id, "created", f"Configuration created: {display_name}")
@@ -311,6 +316,7 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
             "message": f"API configuration created successfully (Priority {assigned_pri}).",
             "id": new_id,
             "priority": assigned_pri,
+            "owner_id": user_id,
         }), 201
 
     @admin_bp.route("/api/configs/<int:config_id>", methods=["PUT"])
@@ -352,6 +358,8 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
         if enabled is not None:
             enabled_int = 1 if enabled else 0
 
+        owner_id = data.get("owner_id")
+
         updated = db.update_config(
             config_id=config_id,
             display_name=display_name,
@@ -360,6 +368,7 @@ def init_admin_bp(db: Database, crypto: CredentialCrypto, config: Config) -> Blu
             priority=priority_int,
             enabled=enabled_int,
             notes=notes,
+            owner_id=owner_id,
         )
 
         if updated:

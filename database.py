@@ -164,13 +164,6 @@ class Database:
             )
         )
 
-        # Enforce requirement 6: If on Vercel and DATABASE_URL is missing, fail clearly
-        if os.getenv("VERCEL") and not self.is_postgres:
-            raise RuntimeError(
-                "CRITICAL CONFIGURATION ERROR: Neon PostgreSQL DATABASE_URL is missing in Vercel environment. "
-                "Persistent Neon PostgreSQL storage is required on Vercel to prevent ephemeral data loss."
-            )
-
         raw_path = db_path or self.config.DATABASE_PATH
 
         # Guard against in-memory databases in production
@@ -184,6 +177,17 @@ class Database:
             self.db_path = os.path.abspath(os.path.join(self.config.BASE_DIR, raw_path))
         else:
             self.db_path = os.path.abspath(raw_path)
+
+        # Enforce requirement: If in production (Vercel or FLASK_ENV=production outside test) and DATABASE_URL is missing, fail clearly
+        is_prod_env = bool(os.getenv("VERCEL")) or (
+            (os.getenv("FLASK_ENV") == "production" or os.getenv("ENVIRONMENT") == "production")
+            and not (bool(os.getenv("TESTING")) or ("pytest" in sys.modules))
+        )
+        if (is_prod_env or (force_production_check and raw_path != ":memory:")) and not self.is_postgres:
+            raise RuntimeError(
+                "CRITICAL CONFIGURATION ERROR: Neon PostgreSQL DATABASE_URL is missing in production environment. "
+                "Persistent Neon PostgreSQL storage is required in production to prevent ephemeral data loss."
+            )
 
         if not self.is_postgres:
             self._ensure_parent_dir()
@@ -244,6 +248,7 @@ class Database:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS api_configurations (
                         id SERIAL PRIMARY KEY,
+                        owner_id INTEGER DEFAULT NULL REFERENCES admin_users(id) ON DELETE SET NULL,
                         provider_name TEXT NOT NULL,
                         display_name TEXT NOT NULL,
                         endpoint TEXT NOT NULL,
@@ -259,6 +264,8 @@ class Database:
                         last_error_category TEXT DEFAULT NULL,
                         last_failure_reason TEXT DEFAULT '',
                         consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                        total_requests INTEGER NOT NULL DEFAULT 0,
+                        total_successes INTEGER NOT NULL DEFAULT 0,
                         notes TEXT DEFAULT '',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -310,8 +317,11 @@ class Database:
                 """)
                 # Safe migrations for existing PostgreSQL tables
                 try:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS owner_id INTEGER DEFAULT NULL REFERENCES admin_users(id) ON DELETE SET NULL")
                     conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0")
                     conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS last_failure_reason TEXT DEFAULT ''")
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS total_requests INTEGER NOT NULL DEFAULT 0")
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN IF NOT EXISTS total_successes INTEGER NOT NULL DEFAULT 0")
                 except Exception as e:
                     logger.debug("PostgreSQL column addition: %s", e)
 
@@ -326,6 +336,7 @@ class Database:
                 )
 
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_api_config_eligibility ON api_configurations(enabled, health_status, priority)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_api_config_owner ON api_configurations(owner_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_api_event_history_config ON api_event_history(api_config_id, timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_admin_users_username ON admin_users(username)")
                 conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_username_lower ON admin_users(LOWER(username))")
@@ -336,6 +347,7 @@ class Database:
                 conn.executescript("""
                     CREATE TABLE IF NOT EXISTS api_configurations (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_id INTEGER DEFAULT NULL,
                         provider_name TEXT NOT NULL,
                         display_name TEXT NOT NULL,
                         endpoint TEXT NOT NULL,
@@ -351,9 +363,12 @@ class Database:
                         last_error_category TEXT DEFAULT NULL,
                         last_failure_reason TEXT DEFAULT '',
                         consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                        total_requests INTEGER NOT NULL DEFAULT 0,
+                        total_successes INTEGER NOT NULL DEFAULT 0,
                         notes TEXT DEFAULT '',
                         created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (owner_id) REFERENCES admin_users(id) ON DELETE SET NULL
                     );
 
                     CREATE TABLE IF NOT EXISTS api_event_history (
@@ -411,10 +426,18 @@ class Database:
                 """)
                 # Safe migrations for existing SQLite tables
                 cols = [r[1] for r in conn.execute("PRAGMA table_info(api_configurations)").fetchall()]
+                if "owner_id" not in cols:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN owner_id INTEGER DEFAULT NULL")
                 if "consecutive_failures" not in cols:
                     conn.execute("ALTER TABLE api_configurations ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0")
                 if "last_failure_reason" not in cols:
                     conn.execute("ALTER TABLE api_configurations ADD COLUMN last_failure_reason TEXT DEFAULT ''")
+                if "total_requests" not in cols:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN total_requests INTEGER NOT NULL DEFAULT 0")
+                if "total_successes" not in cols:
+                    conn.execute("ALTER TABLE api_configurations ADD COLUMN total_successes INTEGER NOT NULL DEFAULT 0")
+
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_api_config_owner ON api_configurations(owner_id)")
                 
                 # Seed rotation state row if absent
                 conn.execute(
@@ -484,21 +507,41 @@ class Database:
                 # 2. Migrate api_configurations
                 src_cursor = src_conn.execute("SELECT * FROM api_configurations ORDER BY id ASC")
                 for c in src_cursor.fetchall():
+                    c_dict = dict(c)
                     dst_conn.execute(
                         """
                         INSERT INTO api_configurations (
-                            id, provider_name, display_name, endpoint, encrypted_credential,
+                            id, owner_id, provider_name, display_name, endpoint, encrypted_credential,
                             auth_config, provider_config, priority, enabled,
                             health_status, paused_until, last_success_at, last_failure_at,
-                            last_error_category, notes, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            last_error_category, last_failure_reason, consecutive_failures,
+                            total_requests, total_successes, notes, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (id) DO NOTHING
                         """,
                         (
-                            c["id"], c["provider_name"], c["display_name"], c["endpoint"], c["encrypted_credential"],
-                            c["auth_config"], c["provider_config"], c["priority"], c["enabled"],
-                            c["health_status"], c["paused_until"], c["last_success_at"], c["last_failure_at"],
-                            c["last_error_category"], c["notes"], c["created_at"], c["updated_at"]
+                            c_dict.get("id"),
+                            c_dict.get("owner_id"),
+                            c_dict.get("provider_name"),
+                            c_dict.get("display_name"),
+                            c_dict.get("endpoint"),
+                            c_dict.get("encrypted_credential"),
+                            c_dict.get("auth_config", "{}"),
+                            c_dict.get("provider_config", "{}"),
+                            c_dict.get("priority", 10),
+                            c_dict.get("enabled", 1),
+                            c_dict.get("health_status", "active"),
+                            c_dict.get("paused_until"),
+                            c_dict.get("last_success_at"),
+                            c_dict.get("last_failure_at"),
+                            c_dict.get("last_error_category"),
+                            c_dict.get("last_failure_reason", ""),
+                            c_dict.get("consecutive_failures", 0),
+                            c_dict.get("total_requests", 0),
+                            c_dict.get("total_successes", 0),
+                            c_dict.get("notes", ""),
+                            c_dict.get("created_at"),
+                            c_dict.get("updated_at"),
                         )
                     )
                     migrated_configs += 1
@@ -726,6 +769,7 @@ class Database:
         auth_config: dict | None = None,
         provider_config: dict | None = None,
         notes: str = "",
+        owner_id: int | None = None,
     ) -> int:
         """Insert a new API configuration record and return its ID."""
         now_iso = _utc_now_iso()
@@ -738,18 +782,21 @@ class Database:
                 cursor = conn.execute(
                     """
                     INSERT INTO api_configurations (
-                        provider_name, display_name, endpoint, encrypted_credential,
+                        owner_id, provider_name, display_name, endpoint, encrypted_credential,
                         auth_config, provider_config, priority, enabled,
                         health_status, notes, created_at, updated_at,
-                        consecutive_failures, last_failure_reason
+                        consecutive_failures, last_failure_reason,
+                        total_requests, total_successes
                     ) VALUES (
-                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?,
                         ?, ?, (SELECT COALESCE(MAX(priority), 0) + 1 FROM api_configurations), ?,
                         'active', ?, ?, ?,
-                        0, ''
+                        0, '',
+                        0, 0
                     )
                     """,
                     (
+                        owner_id,
                         provider_name.strip().lower(),
                         display_name.strip(),
                         endpoint.strip(),
@@ -766,18 +813,21 @@ class Database:
                 cursor = conn.execute(
                     """
                     INSERT INTO api_configurations (
-                        provider_name, display_name, endpoint, encrypted_credential,
+                        owner_id, provider_name, display_name, endpoint, encrypted_credential,
                         auth_config, provider_config, priority, enabled,
                         health_status, notes, created_at, updated_at,
-                        consecutive_failures, last_failure_reason
+                        consecutive_failures, last_failure_reason,
+                        total_requests, total_successes
                     ) VALUES (
-                        ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?,
                         ?, ?, ?, ?,
                         'active', ?, ?, ?,
-                        0, ''
+                        0, '',
+                        0, 0
                     )
                     """,
                     (
+                        owner_id,
                         provider_name.strip().lower(),
                         display_name.strip(),
                         endpoint.strip(),
@@ -805,6 +855,7 @@ class Database:
         notes: str | None = None,
         auth_config: dict | None = None,
         provider_config: dict | None = None,
+        owner_id: int | None = None,
     ) -> bool:
         """Update an existing configuration without overwriting unset fields."""
         existing = self.get_config_by_id(config_id)
@@ -820,6 +871,7 @@ class Database:
         new_notes = notes.strip() if notes is not None else existing["notes"]
         new_auth = json.dumps(auth_config) if auth_config is not None else existing["auth_config"]
         new_prov = json.dumps(provider_config) if provider_config is not None else existing["provider_config"]
+        new_owner_id = owner_id if owner_id is not None else existing.get("owner_id")
 
         with self.get_connection() as conn:
             conn.execute(
@@ -833,6 +885,7 @@ class Database:
                     notes = ?,
                     auth_config = ?,
                     provider_config = ?,
+                    owner_id = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -845,6 +898,7 @@ class Database:
                     new_notes,
                     new_auth,
                     new_prov,
+                    new_owner_id,
                     now_iso,
                     config_id,
                 ),
@@ -898,6 +952,7 @@ class Database:
                         last_error_category = ?,
                         last_failure_reason = ?,
                         consecutive_failures = consecutive_failures + 1,
+                        total_requests = total_requests + 1,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -912,6 +967,7 @@ class Database:
                         last_failure_at = ?,
                         last_error_category = ?,
                         last_failure_reason = ?,
+                        total_requests = total_requests + 1,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -933,6 +989,8 @@ class Database:
                     last_error_category = NULL,
                     last_failure_reason = '',
                     consecutive_failures = 0,
+                    total_requests = total_requests + 1,
+                    total_successes = total_successes + 1,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -1499,6 +1557,7 @@ class Database:
                         priority=cfg.get("priority", 10),
                         enabled=cfg.get("enabled", 1),
                         notes=cfg.get("notes", ""),
+                        owner_id=cfg.get("owner_id"),
                     )
                     restored_configs += 1
 
@@ -1531,6 +1590,11 @@ class Database:
         """
         if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
             return False
+
+        if self.is_postgres:
+            # Neon PostgreSQL is the authoritative persistent database.
+            # Avoid using ephemeral filesystem paths (/tmp) in production.
+            return True
 
         data = self.export_backup()
         # Only write to temporary runtime directory, never dirty source repository
