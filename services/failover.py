@@ -202,8 +202,9 @@ class ApiFailoverCoordinator:
 
             # ── 3A. Terminal Lookup: Match found OR Verified negative result ──
             if res.is_terminal_lookup:
-                self.db.record_success(cfg_id, duration=res.duration)
-                self.db.update_rotation_state(last_config_id=cfg_id, last_priority=api_cfg["priority"])
+                self.db.record_success_and_rotation(
+                    cfg_id, priority=api_cfg.get("priority"), duration=res.duration
+                )
                 return {
                     "success": True,
                     "status": res.status,

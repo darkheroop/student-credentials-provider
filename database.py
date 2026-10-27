@@ -6,12 +6,16 @@ Provides thread-safe connections, automatic schema initialization, data migratio
 health status tracking, and failover eligibility queries.
 """
 
+from functools import lru_cache
 import json
 import logging
 import os
+import queue
 import secrets
 import sqlite3
 import sys
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -30,8 +34,9 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+@lru_cache(maxsize=8)
 def parse_pg_url(url: str) -> dict[str, Any]:
-    """Parse PostgreSQL / Neon connection URL into connection parameters."""
+    """Parse PostgreSQL / Neon connection URL into connection parameters (cached)."""
     parsed = urlparse(url)
     user = unquote(parsed.username or "")
     password = unquote(parsed.password or "")
@@ -107,6 +112,9 @@ class PostgresConnection:
 
     def __init__(self, raw_conn: Any):
         self.raw_conn = raw_conn
+        self.created_at = time.time()
+        self.last_used_at = self.created_at
+        self.is_broken = False
 
     def execute(self, sql: str, params: tuple | list = ()):
         cursor = self.raw_conn.cursor()
@@ -116,7 +124,12 @@ class PostgresConnection:
             pg_sql = pg_sql.rstrip(";") + " RETURNING id"
             auto_returning = True
 
-        cursor.execute(pg_sql, params)
+        try:
+            cursor.execute(pg_sql, params)
+        except Exception:
+            self.is_broken = True
+            raise
+
         lastrowid = None
         if auto_returning or "RETURNING ID" in pg_sql.upper():
             try:
@@ -129,19 +142,120 @@ class PostgresConnection:
         return PostgresCursor(cursor, lastrowid=lastrowid)
 
     def commit(self):
-        self.raw_conn.commit()
+        try:
+            self.raw_conn.commit()
+        except Exception:
+            self.is_broken = True
+            raise
 
     def rollback(self):
         try:
             self.raw_conn.rollback()
         except Exception:
-            pass
+            self.is_broken = True
 
     def close(self):
         try:
             self.raw_conn.close()
         except Exception:
             pass
+
+
+_PG_POOLS: dict[str, "PgConnectionPool"] = {}
+_PG_POOLS_LOCK = threading.Lock()
+_POSTGRES_SCHEMA_READY: set[str] = set()
+
+
+class PgConnectionPool:
+    """Thread-safe connection pool for Neon PostgreSQL connections with idle health checks."""
+
+    def __init__(self, database_url: str, max_size: int = 5, max_idle_seconds: float = 45.0):
+        self.database_url = database_url
+        self.max_size = max_size
+        self.max_idle_seconds = max_idle_seconds
+        self._pool: queue.Queue = queue.Queue(maxsize=max_size)
+        self._lock = threading.Lock()
+        self._total_created = 0
+
+    def _create_raw_conn(self):
+        import pg8000.dbapi
+        pg_params = parse_pg_url(self.database_url)
+        return pg8000.dbapi.connect(
+            user=pg_params["user"],
+            password=pg_params["password"],
+            host=pg_params["host"],
+            port=pg_params["port"],
+            database=pg_params["database"],
+            ssl_context=pg_params["ssl_context"],
+            timeout=15.0,
+        )
+
+    def acquire(self) -> PostgresConnection:
+        now = time.time()
+        while True:
+            try:
+                conn, last_used = self._pool.get_nowait()
+            except queue.Empty:
+                raw = self._create_raw_conn()
+                with self._lock:
+                    self._total_created += 1
+                return PostgresConnection(raw)
+
+            # Check if idle beyond threshold
+            if (now - last_used) > self.max_idle_seconds:
+                try:
+                    cur = conn.raw_conn.cursor()
+                    cur.execute("SELECT 1")
+                    cur.fetchall()
+                    conn.last_used_at = now
+                    conn.is_broken = False
+                    return conn
+                except Exception:
+                    try:
+                        conn.raw_conn.close()
+                    except Exception:
+                        pass
+                    raw = self._create_raw_conn()
+                    return PostgresConnection(raw)
+            else:
+                conn.last_used_at = now
+                conn.is_broken = False
+                return conn
+
+    def release(self, conn: PostgresConnection, error: bool = False):
+        if conn is None:
+            return
+        if error or getattr(conn, "is_broken", False):
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self._lock:
+                self._total_created = max(0, self._total_created - 1)
+            return
+
+        try:
+            conn.rollback()
+            conn.last_used_at = time.time()
+            self._pool.put_nowait((conn, time.time()))
+        except (queue.Full, Exception):
+            try:
+                conn.close()
+            except Exception:
+                pass
+            with self._lock:
+                self._total_created = max(0, self._total_created - 1)
+
+
+def get_pg_pool(database_url: str) -> PgConnectionPool:
+    with _PG_POOLS_LOCK:
+        if database_url not in _PG_POOLS:
+            _PG_POOLS[database_url] = PgConnectionPool(database_url)
+        return _PG_POOLS[database_url]
 
 
 class Database:
@@ -192,6 +306,7 @@ class Database:
         if not self.is_postgres:
             self._ensure_parent_dir()
 
+        self._client_key_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
         self.init_db()
         if self.is_postgres:
             self._migrate_sqlite_to_postgres_if_empty()
@@ -205,28 +320,20 @@ class Database:
     def get_connection(self):
         """
         Yield a database connection (Neon PostgreSQL or SQLite) with commit/rollback management.
-        Ensures connections are properly committed and closed.
+        Ensures connections are properly committed and released to the pool.
         """
         if self.is_postgres:
-            import pg8000.dbapi
-            pg_params = parse_pg_url(self.database_url)
-            raw_conn = pg8000.dbapi.connect(
-                user=pg_params["user"],
-                password=pg_params["password"],
-                host=pg_params["host"],
-                port=pg_params["port"],
-                database=pg_params["database"],
-                ssl_context=pg_params["ssl_context"],
-                timeout=15.0,
-            )
-            wrapped_conn = PostgresConnection(raw_conn)
+            pool = get_pg_pool(self.database_url)
+            conn = pool.acquire()
+            err_occurred = False
             try:
-                yield wrapped_conn
+                yield conn
             except Exception:
-                wrapped_conn.rollback()
+                err_occurred = True
+                conn.rollback()
                 raise
             finally:
-                wrapped_conn.close()
+                pool.release(conn, error=err_occurred)
         else:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             conn.row_factory = sqlite3.Row
@@ -244,7 +351,22 @@ class Database:
         """Create database tables and indexes if they do not exist."""
         now_iso = _utc_now_iso()
         if self.is_postgres:
+            if self.database_url in _POSTGRES_SCHEMA_READY:
+                return
+
             with self.get_connection() as conn:
+                try:
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name IN ('api_configurations', 'api_event_history', 'admin_users', 'client_api_keys', 'api_rotation_state')"
+                    )
+                    row = cursor.fetchone()
+                    count = row[0] if row else 0
+                    if count >= 5:
+                        _POSTGRES_SCHEMA_READY.add(self.database_url)
+                        return
+                except Exception as exc:
+                    logger.debug("Fast schema existence check bypassed: %s", exc)
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS api_configurations (
                         id SERIAL PRIMARY KEY,
@@ -342,6 +464,7 @@ class Database:
                 conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_username_lower ON admin_users(LOWER(username))")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_client_api_keys_key ON client_api_keys(api_key)")
                 conn.commit()
+                _POSTGRES_SCHEMA_READY.add(self.database_url)
         else:
             with self.get_connection() as conn:
                 conn.executescript("""
@@ -630,23 +753,38 @@ class Database:
         """
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
-            # Unpause configurations whose cooldown window has expired
-            conn.execute(
+            # Check if any configurations require unpausing to avoid redundant disk writes on read queries
+            unpause_needed = conn.execute(
                 """
-                UPDATE api_configurations
-                SET health_status = 'active',
-                    paused_until = NULL,
-                    updated_at = ?
+                SELECT 1 FROM api_configurations
                 WHERE enabled = 1
                   AND (
                       (paused_until IS NOT NULL AND paused_until <= ?)
                       OR (paused_until IS NULL AND health_status NOT IN ('active', 'config_error', 'auth_failed'))
                   )
                   AND health_status NOT IN ('config_error', 'auth_failed')
+                LIMIT 1
                 """,
-                (now_iso, now_iso),
-            )
-            conn.commit()
+                (now_iso,),
+            ).fetchone()
+
+            if unpause_needed:
+                conn.execute(
+                    """
+                    UPDATE api_configurations
+                    SET health_status = 'active',
+                        paused_until = NULL,
+                        updated_at = ?
+                    WHERE enabled = 1
+                      AND (
+                          (paused_until IS NOT NULL AND paused_until <= ?)
+                          OR (paused_until IS NULL AND health_status NOT IN ('active', 'config_error', 'auth_failed'))
+                      )
+                      AND health_status NOT IN ('config_error', 'auth_failed')
+                    """,
+                    (now_iso, now_iso),
+                )
+                conn.commit()
 
             cursor = conn.execute(
                 """
@@ -1108,6 +1246,42 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
 
+    def record_success_and_rotation(
+        self, config_id: int, priority: int | None = None, duration: float = 0.0
+    ) -> bool:
+        """Atomically update last_success_at and rotation state in a single connection transaction."""
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE api_configurations
+                SET health_status = 'active',
+                    paused_until = NULL,
+                    last_success_at = ?,
+                    last_error_category = NULL,
+                    last_failure_reason = '',
+                    consecutive_failures = 0,
+                    total_requests = total_requests + 1,
+                    total_successes = total_successes + 1,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, now_iso, config_id),
+            )
+            conn.execute(
+                """
+                UPDATE api_rotation_state
+                SET last_config_id = ?,
+                    last_priority = ?,
+                    rotation_counter = rotation_counter + 1,
+                    updated_at = ?
+                WHERE id = 1
+                """,
+                (config_id, priority, now_iso),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def reactivate(self, config_id: int) -> bool:
         """Manually reactivate a paused or quota-exhausted configuration."""
         now_iso = _utc_now_iso()
@@ -1201,9 +1375,10 @@ class Database:
         Seed the initial MD5Decrypt provider from environment variables if the
         configuration table is currently empty.
         """
-        all_configs = self.get_all_configs()
-        if all_configs:
-            return False
+        with self.get_connection() as conn:
+            cursor = conn.execute("SELECT 1 FROM api_configurations LIMIT 1")
+            if cursor.fetchone():
+                return False
 
         key = self.config.MD5DECRYPT_API_KEY
         if not key or key == "replace_with_your_api_key":
@@ -1420,16 +1595,26 @@ class Database:
             return [dict(r) for r in cursor.fetchall()]
 
     def get_client_api_key(self, api_key: str) -> dict[str, Any] | None:
-        """Lookup a client API key by its exact secret value."""
+        """Lookup a client API key by its exact secret value with fast short-lived cache."""
         if not api_key:
             return None
+        cleaned_key = api_key.strip()
+        now = time.time()
+        cached = getattr(self, "_client_key_cache", {}).get(cleaned_key)
+        if cached and (now - cached[0] < 60.0):
+            return cached[1]
+
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "SELECT * FROM client_api_keys WHERE api_key = ?",
-                (api_key.strip(),),
+                (cleaned_key,),
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
+            val = dict(row) if row else None
+            if not hasattr(self, "_client_key_cache"):
+                self._client_key_cache = {}
+            self._client_key_cache[cleaned_key] = (now, val)
+            return val
 
     def create_client_api_key(
         self,
@@ -1437,6 +1622,8 @@ class Database:
         rate_limit_per_minute: int = 60,
     ) -> dict[str, Any]:
         """Generate and store a new unique client API key for an external project."""
+        if hasattr(self, "_client_key_cache"):
+            self._client_key_cache.clear()
         now_iso = _utc_now_iso()
         api_key = f"scp_live_{secrets.token_hex(20)}"
         with self.get_connection() as conn:
@@ -1466,6 +1653,8 @@ class Database:
 
     def set_client_api_key_status(self, key_id: int, is_active: bool) -> bool:
         """Enable or revoke an external client API key."""
+        if hasattr(self, "_client_key_cache"):
+            self._client_key_cache.clear()
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
             cursor = conn.execute(
@@ -1477,6 +1666,8 @@ class Database:
 
     def delete_client_api_key(self, key_id: int) -> bool:
         """Permanently delete a client API key."""
+        if hasattr(self, "_client_key_cache"):
+            self._client_key_cache.clear()
         with self.get_connection() as conn:
             cursor = conn.execute("DELETE FROM client_api_keys WHERE id = ?", (key_id,))
             conn.commit()
@@ -1484,6 +1675,9 @@ class Database:
 
     def record_api_key_usage(self, api_key: str) -> bool:
         """Increment usage counter and update last_used_at timestamp."""
+        cleaned_key = api_key.strip()
+        if hasattr(self, "_client_key_cache"):
+            self._client_key_cache.pop(cleaned_key, None)
         now_iso = _utc_now_iso()
         with self.get_connection() as conn:
             cursor = conn.execute(
@@ -1494,7 +1688,7 @@ class Database:
                     updated_at = ?
                 WHERE api_key = ?
                 """,
-                (now_iso, now_iso, api_key.strip()),
+                (now_iso, now_iso, cleaned_key),
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1687,6 +1881,8 @@ class Database:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not any([data.get("subadmins"), data.get("client_api_keys"), data.get("api_configurations")]):
+                return True
             ok, _ = self.import_backup(data)
             return ok
         except Exception:

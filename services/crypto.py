@@ -24,6 +24,11 @@ class CredentialCrypto:
     def __init__(self, secret_key: str | None = None):
         raw_key = secret_key or os.getenv("API_ENCRYPTION_KEY", "scp-encryption-secret-key-32chars!")
         self.secret_key = raw_key.encode("utf-8")
+        # Precompute domain-separated subkeys once per instance
+        self._enc_key = hashlib.sha256(self.secret_key + b":enc").digest()
+        self._mac_key = hashlib.sha256(self.secret_key + b":mac").digest()
+        # In-memory decrypt cache for instance to avoid recomputing keystream
+        self._decrypt_cache: dict[str, str] = {}
 
     def encrypt(self, plaintext: str) -> str:
         """
@@ -38,23 +43,22 @@ class CredentialCrypto:
             data = plaintext.encode("utf-8")
             nonce = secrets.token_bytes(16)
 
-            # Derive domain-separated subkeys
-            enc_key = hashlib.sha256(self.secret_key + b":enc").digest()
-            mac_key = hashlib.sha256(self.secret_key + b":mac").digest()
-
-            # Generate keystream block-by-block
+            # Generate keystream block-by-block using precomputed enc subkey
             keystream = bytearray()
             counter = 0
             while len(keystream) < len(data):
-                block = hashlib.sha256(enc_key + nonce + counter.to_bytes(4, "big")).digest()
+                block = hashlib.sha256(self._enc_key + nonce + counter.to_bytes(4, "big")).digest()
                 keystream.extend(block)
                 counter += 1
 
             ciphertext = bytes(a ^ b for a, b in zip(data, keystream[:len(data)]))
-            tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+            tag = hmac.new(self._mac_key, nonce + ciphertext, hashlib.sha256).digest()
             payload = nonce + tag + ciphertext
 
-            return "enc:v1:" + base64.urlsafe_b64encode(payload).decode("ascii")
+            token = "enc:v1:" + base64.urlsafe_b64encode(payload).decode("ascii")
+            if len(self._decrypt_cache) < 256:
+                self._decrypt_cache[token] = plaintext
+            return token
         except Exception as exc:
             raise CryptoError(f"Encryption failed: {exc}") from exc
 
@@ -64,6 +68,9 @@ class CredentialCrypto:
         """
         if not token:
             return ""
+
+        if token in self._decrypt_cache:
+            return self._decrypt_cache[token]
 
         if not token.startswith("enc:v1:"):
             raise CryptoError("Invalid or unsupported ciphertext token format.")
@@ -75,22 +82,23 @@ class CredentialCrypto:
 
             nonce, tag, ciphertext = raw[:16], raw[16:48], raw[48:]
 
-            mac_key = hashlib.sha256(self.secret_key + b":mac").digest()
-            expected_tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+            expected_tag = hmac.new(self._mac_key, nonce + ciphertext, hashlib.sha256).digest()
 
             if not hmac.compare_digest(tag, expected_tag):
                 raise CryptoError("Authentication tag verification failed. Data corrupted or key mismatch.")
 
-            enc_key = hashlib.sha256(self.secret_key + b":enc").digest()
             keystream = bytearray()
             counter = 0
             while len(keystream) < len(ciphertext):
-                block = hashlib.sha256(enc_key + nonce + counter.to_bytes(4, "big")).digest()
+                block = hashlib.sha256(self._enc_key + nonce + counter.to_bytes(4, "big")).digest()
                 keystream.extend(block)
                 counter += 1
 
             data = bytes(a ^ b for a, b in zip(ciphertext, keystream[:len(ciphertext)]))
-            return data.decode("utf-8")
+            plaintext = data.decode("utf-8")
+            if len(self._decrypt_cache) < 256:
+                self._decrypt_cache[token] = plaintext
+            return plaintext
         except CryptoError:
             raise
         except Exception as exc:

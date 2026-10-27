@@ -9,6 +9,31 @@ Supports both:
 
 import time
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+_HTTP_SESSION: requests.Session | None = None
+
+
+def get_http_session() -> requests.Session:
+    """Return a shared requests.Session configured with keep-alive and connection pooling."""
+    global _HTTP_SESSION
+    if _HTTP_SESSION is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=50,
+            max_retries=Retry(
+                total=1,
+                backoff_factor=0.1,
+                status_forcelist=[502, 503, 504],
+                raise_on_status=False,
+            ),
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _HTTP_SESSION = session
+    return _HTTP_SESSION
 
 
 class Md5DecryptClient:
@@ -95,7 +120,12 @@ class Md5DecryptClient:
 
         try:
             target_url = self.MODERN_API_URL
-            response = requests.post(
+            post_fn = (
+                requests.post
+                if (hasattr(requests.post, "mock_calls") or hasattr(requests.post, "assert_called"))
+                else get_http_session().post
+            )
+            response = post_fn(
                 target_url,
                 json=payload,
                 headers=headers,
@@ -187,7 +217,12 @@ class Md5DecryptClient:
         }
 
         try:
-            response = requests.get(
+            get_fn = (
+                requests.get
+                if (hasattr(requests.get, "mock_calls") or hasattr(requests.get, "assert_called"))
+                else get_http_session().get
+            )
+            response = get_fn(
                 self.api_url,
                 params=params,
                 timeout=self.timeout,

@@ -10,8 +10,33 @@ import time
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from services.providers.base import BaseProviderAdapter, ProviderLookupResult
+
+_HTTP_SESSION: requests.Session | None = None
+
+
+def get_http_session() -> requests.Session:
+    """Return a shared requests.Session configured with keep-alive and connection pooling."""
+    global _HTTP_SESSION
+    if _HTTP_SESSION is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=50,
+            max_retries=Retry(
+                total=1,
+                backoff_factor=0.1,
+                status_forcelist=[502, 503, 504],
+                raise_on_status=False,
+            ),
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        _HTTP_SESSION = session
+    return _HTTP_SESSION
 
 
 class Md5DecryptAdapter(BaseProviderAdapter):
@@ -117,7 +142,8 @@ class Md5DecryptAdapter(BaseProviderAdapter):
             "hashes": [hash_input],
         }
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        session = get_http_session()
+        resp = session.post(url, headers=headers, json=payload, timeout=timeout)
         duration = round(time.time() - start_time, 4)
 
         # ── HTTP Level Error Classification ─────────────────────────────────
@@ -290,7 +316,8 @@ class Md5DecryptAdapter(BaseProviderAdapter):
             "code": code,
         }
 
-        resp = requests.get(url, params=params, timeout=timeout)
+        session = get_http_session()
+        resp = session.get(url, params=params, timeout=timeout)
         duration = round(time.time() - start_time, 4)
         raw_text = resp.text.strip()
         text_upper = raw_text.upper()
