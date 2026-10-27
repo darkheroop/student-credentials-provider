@@ -191,19 +191,15 @@ class ApiFailoverCoordinator:
                     duration=duration,
                 )
 
-            # Record event in history
-            self.db.record_event(
-                config_id=cfg_id,
-                event_category=res.status,
-                sanitized_message=res.error_message or f"Lookup returned {res.status}",
-                http_status=res.http_status,
-                duration=res.duration,
-            )
-
             # ── 3A. Terminal Lookup: Match found OR Verified negative result ──
             if res.is_terminal_lookup:
-                self.db.record_success_and_rotation(
-                    cfg_id, priority=api_cfg.get("priority"), duration=res.duration
+                self.db.record_terminal_success(
+                    config_id=cfg_id,
+                    event_category=res.status,
+                    sanitized_message=res.error_message or f"Lookup returned {res.status}",
+                    http_status=res.http_status,
+                    duration=res.duration,
+                    priority=api_cfg.get("priority"),
                 )
                 return {
                     "success": True,
@@ -221,6 +217,15 @@ class ApiFailoverCoordinator:
                     "message": "A matching entry was returned." if res.found else "No matching record was found in the database.",
                     "error": None,
                 }
+
+            # Record non-terminal / failure event in history
+            self.db.record_event(
+                config_id=cfg_id,
+                event_category=res.status,
+                sanitized_message=res.error_message or f"Lookup returned {res.status}",
+                http_status=res.http_status,
+                duration=res.duration,
+            )
 
             # ── 3B. Explicit Quota Exhaustion ─────────────────────────────────
             if res.status == "quota_exhausted":

@@ -1324,35 +1324,87 @@ class Database:
                 """,
                 (config_id, event_category, now_iso, sanitized_message, http_status, float(duration)),
             )
-            # Bound history size: keep at most 200 events per config
-            if self.is_postgres:
-                conn.execute(
-                    """
-                    DELETE FROM api_event_history
-                    WHERE id IN (
-                        SELECT id FROM api_event_history
-                        WHERE api_config_id = ?
-                        ORDER BY timestamp DESC
-                        OFFSET 200
+            # Bound history size periodically (e.g. 1 in 25 requests) to avoid expensive subquery on every lookup
+            if secrets.randbelow(25) == 0:
+                if self.is_postgres:
+                    conn.execute(
+                        """
+                        DELETE FROM api_event_history
+                        WHERE id IN (
+                            SELECT id FROM api_event_history
+                            WHERE api_config_id = ?
+                            ORDER BY timestamp DESC
+                            OFFSET 200
+                        )
+                        """,
+                        (config_id,),
                     )
-                    """,
-                    (config_id,),
-                )
-            else:
-                conn.execute(
-                    """
-                    DELETE FROM api_event_history
-                    WHERE id IN (
-                        SELECT id FROM api_event_history
-                        WHERE api_config_id = ?
-                        ORDER BY timestamp DESC
-                        LIMIT -1 OFFSET 200
+                else:
+                    conn.execute(
+                        """
+                        DELETE FROM api_event_history
+                        WHERE id IN (
+                            SELECT id FROM api_event_history
+                            WHERE api_config_id = ?
+                            ORDER BY timestamp DESC
+                            LIMIT -1 OFFSET 200
+                        )
+                        """,
+                        (config_id,),
                     )
-                    """,
-                    (config_id,),
-                )
             conn.commit()
             return cursor.lastrowid
+
+    def record_terminal_success(
+        self,
+        config_id: int,
+        event_category: str,
+        sanitized_message: str,
+        http_status: int | None = None,
+        duration: float = 0.0,
+        priority: int | None = None,
+    ) -> bool:
+        """Atomically record event, update success counters, and advance rotation in one transaction."""
+        now_iso = _utc_now_iso()
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO api_event_history (
+                    api_config_id, event_category, timestamp,
+                    sanitized_message, http_status, duration
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (config_id, event_category, now_iso, sanitized_message, http_status, float(duration)),
+            )
+            cursor = conn.execute(
+                """
+                UPDATE api_configurations
+                SET health_status = 'active',
+                    paused_until = NULL,
+                    last_success_at = ?,
+                    last_error_category = NULL,
+                    last_failure_reason = '',
+                    consecutive_failures = 0,
+                    total_requests = total_requests + 1,
+                    total_successes = total_successes + 1,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, now_iso, config_id),
+            )
+            conn.execute(
+                """
+                UPDATE api_rotation_state
+                SET last_config_id = ?,
+                    last_priority = ?,
+                    rotation_counter = rotation_counter + 1,
+                    updated_at = ?
+                WHERE id = 1
+                """,
+                (config_id, priority, now_iso),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def get_events_for_config(self, config_id: int, limit: int = 50) -> list[dict[str, Any]]:
         """Retrieve recent sanitized events for a specific API configuration."""
