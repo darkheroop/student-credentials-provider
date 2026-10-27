@@ -866,6 +866,91 @@ class Database:
         self.sync_rotation_state_priority()
         return self.get_all_configs()
 
+    def demote_failed_provider_to_last(
+        self,
+        config_id: int,
+        health_status: str,
+        paused_until: str | None = None,
+        error_category: str | None = None,
+        failure_reason: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Atomically update a failed provider's health status/cooldown and rotate its
+        priority to the last position (N), promoting intervening providers up by 1.
+
+        Ensures full PostgreSQL / SQLite transaction safety with row locking (FOR UPDATE)
+        and zero transient priority collisions using a two-phase priority update.
+        """
+        from services.priority import calculate_reordered_sequence
+
+        now_iso = _utc_now_iso()
+        if paused_until and paused_until.endswith("Z"):
+            paused_until = paused_until[:-1] + "+00:00"
+
+        with self.get_connection() as conn:
+            query = (
+                "SELECT id, priority FROM api_configurations ORDER BY priority ASC, id ASC FOR UPDATE"
+                if self.is_postgres
+                else "SELECT id, priority FROM api_configurations ORDER BY priority ASC, id ASC"
+            )
+            cursor = conn.execute(query)
+            current_configs = [dict(r) for r in cursor.fetchall()]
+
+            if not current_configs:
+                return []
+
+            target_exists = any(c["id"] == config_id for c in current_configs)
+            if not target_exists:
+                return current_configs
+
+            # Move target provider to the last position (len(current_configs))
+            new_ordered_ids = calculate_reordered_sequence(
+                current_configs, config_id, len(current_configs)
+            )
+
+            # Phase 1: Set temporary negative priorities to prevent duplicate key or constraint collisions
+            for idx, cid in enumerate(new_ordered_ids, start=1):
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (-idx, now_iso, cid),
+                )
+
+            # Phase 2: Set consecutive positive priorities 1..N
+            for idx, cid in enumerate(new_ordered_ids, start=1):
+                conn.execute(
+                    "UPDATE api_configurations SET priority = ?, updated_at = ? WHERE id = ?",
+                    (idx, now_iso, cid),
+                )
+
+            # Phase 3: Update the failed provider's health status, cooldown, and failure metrics
+            conn.execute(
+                """
+                UPDATE api_configurations
+                SET health_status = ?,
+                    paused_until = ?,
+                    last_failure_at = ?,
+                    last_error_category = ?,
+                    last_failure_reason = ?,
+                    consecutive_failures = consecutive_failures + 1,
+                    total_requests = total_requests + 1,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    health_status,
+                    paused_until,
+                    now_iso,
+                    error_category,
+                    failure_reason or "",
+                    now_iso,
+                    config_id,
+                ),
+            )
+            conn.commit()
+
+        self.sync_rotation_state_priority()
+        return self.get_all_configs()
+
     def normalize_priorities(self) -> list[dict[str, Any]]:
         """
         Normalize priorities of all api_configurations to sequential 1, 2, 3...

@@ -108,30 +108,33 @@ class ApiFailoverCoordinator:
             }
 
         # ── 2. Order of attempts: Latest saved priority order (Priority 1 first) ─
-        # Priority 1 is always attempted first for each new request.
-        ordered_configs = list(eligible_configs)
-
-        max_attempts = min(len(ordered_configs), getattr(self.config, "MAX_FAILOVER_ATTEMPTS", 5))
+        max_attempts = getattr(self.config, "MAX_FAILOVER_ATTEMPTS", 5)
         attempted_ids: set[int] = set()
         last_failure_reason = "No provider succeeded."
         total_timeout = float(getattr(self.config, "STUDENT_LOOKUP_TIMEOUT_SECONDS", 10))
 
-        # ── 3. Attempt providers in strict priority sequence ────────────────
-        for i in range(max_attempts):
-            api_cfg = ordered_configs[i]
-            cfg_id = api_cfg["id"]
-
-            if cfg_id in attempted_ids:
-                continue
-            attempted_ids.add(cfg_id)
-
+        # ── 3. Attempt providers in strict priority sequence with automatic rotation ─
+        for attempt in range(max_attempts):
             # Check overall request timeout
             elapsed = time.time() - overall_start
             remaining_timeout = total_timeout - elapsed
-            if i > 0 and remaining_timeout <= 0.5:
+            if attempt > 0 and remaining_timeout <= 0.5:
                 logger.warning("Overall lookup timeout approaching; terminating failover loop.")
                 last_failure_reason = "Request timeout during provider failover."
                 break
+
+            # Always fetch latest eligible configurations from authoritative database,
+            # excluding providers already attempted during this request.
+            eligible_configs = self.db.get_eligible_configs()
+            candidates = [c for c in eligible_configs if c["id"] not in attempted_ids]
+
+            if not candidates:
+                break
+
+            # Select the highest-priority eligible provider (Priority 1 first)
+            api_cfg = candidates[0]
+            cfg_id = api_cfg["id"]
+            attempted_ids.add(cfg_id)
 
             provider_timeout = max(1.0, min(remaining_timeout, total_timeout))
 
@@ -227,7 +230,7 @@ class ApiFailoverCoordinator:
                 duration=res.duration,
             )
 
-            # ── 3B. Explicit Quota Exhaustion ─────────────────────────────────
+            # ── 3B. Explicit Quota Exhaustion: Demote to last priority & cooldown ─
             if res.status == "quota_exhausted":
                 now_utc = datetime.now(timezone.utc)
                 pause_minutes = getattr(self.config, "DEFAULT_PAUSE_DURATION_MINUTES", 60)
@@ -236,7 +239,7 @@ class ApiFailoverCoordinator:
                 else:
                     paused_until = (now_utc + timedelta(minutes=pause_minutes)).isoformat()
 
-                self.db.set_health_status(
+                self.db.demote_failed_provider_to_last(
                     cfg_id,
                     health_status="quota_exhausted",
                     paused_until=paused_until,
@@ -246,13 +249,13 @@ class ApiFailoverCoordinator:
                 last_failure_reason = f"Provider {api_cfg['display_name']} quota exhausted."
                 continue
 
-            # ── 3C. Rate Limited (HTTP 429) ────────────────────────────────────
+            # ── 3C. Rate Limited (HTTP 429): Demote to last priority & cooldown ──
             if res.status == "rate_limited" or res.http_status == 429:
                 now_utc = datetime.now(timezone.utc)
                 retry_seconds = res.retry_after_seconds or getattr(self.config, "RATE_LIMIT_COOLDOWN_SECONDS", 60)
                 paused_until = (now_utc + timedelta(seconds=retry_seconds)).isoformat()
 
-                self.db.set_health_status(
+                self.db.demote_failed_provider_to_last(
                     cfg_id,
                     health_status="rate_limited",
                     paused_until=paused_until,
@@ -274,11 +277,11 @@ class ApiFailoverCoordinator:
                 last_failure_reason = f"Provider {api_cfg['display_name']} authentication failed."
                 continue
 
-            # ── 3E. Server Errors (HTTP 5xx) ───────────────────────────────────
+            # ── 3E. Server Errors (HTTP 5xx): Demote to last priority & cooldown ─
             if res.status == "server_error" or (res.http_status and res.http_status >= 500):
                 cooldown_sec = getattr(self.config, "SERVER_ERROR_COOLDOWN_SECONDS", 60)
                 cooldown_until = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_sec)).isoformat()
-                self.db.set_health_status(
+                self.db.demote_failed_provider_to_last(
                     cfg_id,
                     health_status="degraded",
                     paused_until=cooldown_until,
@@ -288,11 +291,11 @@ class ApiFailoverCoordinator:
                 last_failure_reason = f"Provider {api_cfg['display_name']} server error."
                 continue
 
-            # ── 3F. Network Timeout or Connection Error ────────────────────────
+            # ── 3F. Network Timeout or Connection Error: Demote to last priority ─
             if res.status in ("timeout", "connection_error") or res.error_category in ("network_timeout", "network_error"):
                 cooldown_sec = getattr(self.config, "NETWORK_ERROR_COOLDOWN_SECONDS", 60)
                 cooldown_until = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_sec)).isoformat()
-                self.db.set_health_status(
+                self.db.demote_failed_provider_to_last(
                     cfg_id,
                     health_status="temporarily_unavailable",
                     paused_until=cooldown_until,
@@ -302,9 +305,9 @@ class ApiFailoverCoordinator:
                 last_failure_reason = f"Provider {api_cfg['display_name']} network/connection error."
                 continue
 
-            # ── 3G. Invalid provider response / Unexpected Schema ──────────────
+            # ── 3G. Invalid provider response / Unexpected Schema: Demote to last ─
             cooldown_until = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
-            self.db.set_health_status(
+            self.db.demote_failed_provider_to_last(
                 cfg_id,
                 health_status="degraded",
                 paused_until=cooldown_until,
